@@ -1,17 +1,18 @@
-// Auto Layout - generates a layout around the path the player actually played in an editor playtest.
+// Auto Layout - builds a layout around the way the player plays an editor playtest, while they play.
 //
-// Flow (GEN button ON):
-//   playtest starts -> everything generated earlier is removed, random gamemode / speed / mini portals are placed ahead
-//   while playing   -> the player's position, gamemode and state are sampled every frame and, in live mode,
-//                      blocks and spikes appear right behind the player while they play
-//   playtest stops  -> portals the player never touched are removed (and, with live mode off, everything is built now)
+// With GEN on, during a playtest:
+//   * clicking in mid-air puts a jump orb exactly where the player is, so the click becomes an orb jump
+//   * every few seconds a gamemode / speed / mini portal appears right in front of the player
+//   * blocks and spikes are built just behind the player, around the path that was actually played
+// When the playtest stops, every portal gets walled in above and below so it cannot be avoided.
 //
-// Every obstacle is checked against the recorded path with conservative (slightly too large) hitboxes,
-// so the level is always beatable with the inputs that were recorded.
+// Every obstacle is checked against the recorded path first (with boxes a little larger than the real hitboxes),
+// so the result is always beatable with the inputs that were played.
+//
+// Positions are editor positions: the ground surface is at y = 90, so an object standing on it has y = 105.
 #include <Geode/Geode.hpp>
 #include <Geode/modify/LevelEditorLayer.hpp>
 #include <Geode/modify/EditorUI.hpp>
-#include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/ui/GeodeUI.hpp>
 #include <vector>
 #include <random>
@@ -28,30 +29,35 @@ enum Mode { CUBE, SHIP, BALL, UFO, WAVE, ROBOT, SPIDER, SWING, MODE_COUNT };
 static const int   PORTAL_ID[MODE_COUNT] = {12, 13, 47, 111, 660, 745, 1331, 1933};
 static const char* MODE_KEY[MODE_COUNT]  = {"mode-cube", "mode-ship", "mode-ball", "mode-ufo", "mode-wave", "mode-robot", "mode-spider", "mode-swing"};
 static const int   SPEED_ID[5] = {200, 201, 202, 203, 1334};
-constexpr int GEN_LAYER = 77;                        // editor layer that marks generated objects
-static const int ORB_ID[3] = {36, 141, 1333};        // yellow, pink, red
-constexpr float WALL_TOP = 465.f;                    // walls are filled up to here (above any flying-mode ceiling)
-constexpr int ID_BLOCK = 1, ID_SPIKE = 8, ID_MINI_ON = 101, ID_MINI_OFF = 99;
+static const int   ORB_ID[3] = {36, 141, 1333};      // yellow, pink, red
+constexpr int   GEN_LAYER = 77;                      // editor layer that marks generated objects
+constexpr float GROUND = 90.f;                       // y of the ground surface
+constexpr float WALL_TOP = GROUND + 465.f;           // walls are filled up to here (above any flying-mode ceiling)
+constexpr int   ID_BLOCK = 1, ID_SPIKE = 8, ID_MINI_ON = 101, ID_MINI_OFF = 99;
 
-struct Sample { float x, y, v; int mode; bool ground, mini; };
+struct Sample { float x, y, v, hw, hh; int mode; bool ground, mini; };   // hw / hh = half of the player's real hitbox
 struct Box { float x0, y0, x1, y1; };
-struct Portal { Ref<GameObject> obj; float x, y, halfW, halfH; };
+struct Portal { float x, y, halfW, halfH; };
 
 static bool g_armed = false;
 static bool g_recording = false;
-static LevelEditorLayer* g_owner = nullptr;          // editor the vectors below belong to
 static ButtonSprite* g_label = nullptr;
 static std::vector<Sample> g_path;
-static std::vector<Ref<GameObject>> g_obstacles;
-static std::vector<Portal> g_portals;
-static std::vector<Portal> g_orbs;                   // jump orbs offered to the player; the ones never touched are removed
+static std::vector<Portal> g_portals;                // gamemode / speed / mini portals placed this run
+static std::vector<Portal> g_orbs;                   // jump orbs placed this run
+static int g_objects = 0;
+
 // state of the current run
 static bool  g_live = true;
-static float g_doneX = 0.f;                          // everything up to here already existed: never generate there
 static float g_nextCol = 0.f;                        // next 30-unit column to build
 static long long g_airStart = -1;                    // index of the last grounded sample before the current jump
 static int   g_fpLeft = 0, g_fpMade = 0;
 static float g_density = 0.6f, g_baseGap = 33.f, g_fps = 240.f;
+static bool  g_wasClicking = false;
+static bool  g_useOrbs = true, g_useSpeeds = true, g_useMinis = false;
+static float g_modeTimer = 0.f, g_speedTimer = 0.f, g_miniTimer = 0.f, g_orbCooldown = 0.f;
+static float g_lastPortalX = -1000.f;
+static std::vector<int> g_modes;
 static std::mt19937 g_rng{(unsigned)std::chrono::steady_clock::now().time_since_epoch().count()};
 
 static float frand(float a, float b) { return std::uniform_real_distribution<float>(a, b)(g_rng); }
@@ -63,24 +69,20 @@ static void setLabel() {
 }
 
 // ---- object helpers ---------------------------------------------------------------------------------
-static GameObject* place(LevelEditorLayer* lel, int id, float x, float y, float rot = 0.f) {
+static GameObject* place(LevelEditorLayer* lel, int id, float x, float y, bool flipY = false) {
     auto obj = lel->createObject(id, ccp(x, y), true);
-    if (obj && rot != 0.f) obj->setRotation(rot);
-    if (obj) obj->m_editorLayer = GEN_LAYER;
+    if (!obj) return nullptr;
+    if (flipY) obj->setFlipY(true);
+    obj->m_editorLayer = GEN_LAYER;
+    ++g_objects;
     return obj;
 }
 
-static void obstacle(LevelEditorLayer* lel, int id, float x, float y, float rot = 0.f) {
-    if (auto obj = place(lel, id, x, y, rot)) g_obstacles.push_back(obj);
-}
-
-// conservative hitboxes (a little larger than the real ones, so "valid" really means safe)
+// conservative boxes (a little larger than the real hitboxes, so "valid" really means safe)
 static Box blockBox(float x, float y) { return {x - 15.f, y - 15.f, x + 15.f, y + 15.f}; }
 static Box spikeBox(float x, float y, bool down) {
     return down ? Box{x - 5.f, y - 6.f, x + 5.f, y + 15.f} : Box{x - 5.f, y - 15.f, x + 5.f, y + 6.f};
 }
-
-static float halfSize(const Sample& s) { return s.mini ? 9.f : 15.f; }      // full-size box for every gamemode: never smaller than the real one
 
 // true if the recorded path never comes closer than `margin` to the box
 static bool valid(const Box& b, float margin) {
@@ -90,9 +92,9 @@ static bool valid(const Box& b, float margin) {
         const Sample& a = g_path[i];
         const Sample& c = g_path[i + 1];
         if (a.x > b.x1 + 60.f) break;
-        float h = std::max(halfSize(a), halfSize(c)) + margin;
-        float x0 = std::min(a.x, c.x) - h, x1 = std::max(a.x, c.x) + h;     // swept box between two samples
-        float y0 = std::min(a.y, c.y) - h, y1 = std::max(a.y, c.y) + h;
+        float hw = std::max(a.hw, c.hw) + margin, hh = std::max(a.hh, c.hh) + margin;
+        float x0 = std::min(a.x, c.x) - hw, x1 = std::max(a.x, c.x) + hw;       // swept box between two samples
+        float y0 = std::min(a.y, c.y) - hh, y1 = std::max(a.y, c.y) + hh;
         if (x0 < b.x1 && x1 > b.x0 && y0 < b.y1 && y1 > b.y0) return false;
     }
     return true;
@@ -104,15 +106,24 @@ static bool nearPortal(float x) {
     return false;
 }
 
-// ---- before the playtest: place random portals past the existing content ---------------------------
+static int modeOf(PlayerObject* p) {
+    if (p->m_isShip) return SHIP;
+    if (p->m_isBall) return BALL;
+    if (p->m_isBird) return UFO;
+    if (p->m_isDart) return WAVE;
+    if (p->m_isRobot) return ROBOT;
+    if (p->m_isSpider) return SPIDER;
+    if (p->m_isSwing) return SWING;
+    return CUBE;
+}
+
+// ---- before the playtest ----------------------------------------------------------------------------
 static void beginRun(LevelEditorLayer* lel) {
-    g_obstacles.clear();
     g_portals.clear();
     g_orbs.clear();
     g_path.clear();
-    g_owner = lel;
-    g_doneX = 0.f;
-    // remove everything this mod generated before (it is all on editor layer GEN_LAYER), then build over the whole level again
+    g_objects = 0;
+    // remove everything this mod generated before (it is all on editor layer GEN_LAYER), then build the level again
     if (lel->m_objects) {
         std::vector<Ref<GameObject>> old;
         for (auto obj : CCArrayExt<GameObject*>(lel->m_objects))
@@ -130,121 +141,98 @@ static void beginRun(LevelEditorLayer* lel) {
     g_fpMade = 0;
     g_airStart = -1;
     g_nextCol = 0.f;
-}
-
-// portals are stacked over the whole play height so they are hit no matter where the player flies
-static void portalStack(LevelEditorLayer* lel, int id, float x, float halfH) {
-    for (float y = halfH + 2.f; y < 320.f; y += halfH * 2.f)
-        if (auto obj = place(lel, id, x, y)) g_portals.push_back({obj, x, y, 20.f, halfH});
-}
-
-// jump orbs along a cube / robot stretch, at a height a normal jump reaches. avoid = x positions of other portals.
-static void orbRow(LevelEditorLayer* lel, float x0, float x1, const std::vector<float>& avoid) {
-    for (float x = x0 + frand(200.f, 400.f); x < x1 - 150.f; x += frand(300.f, 650.f)) {
-        bool clash = false;
-        for (float a : avoid) clash = clash || std::fabs(a - x) < 90.f;
-        if (clash) continue;
-        float y = chance(0.5f) ? 75.f : 105.f;
-        if (auto obj = place(lel, ORB_ID[irand(0, 2)], x, y)) g_orbs.push_back({obj, x, y, 18.f, 18.f});
-    }
-}
-
-static void prepare(LevelEditorLayer* lel) {
-    beginRun(lel);
-    auto mod = Mod::get();
-    std::vector<int> modes;
+    g_wasClicking = false;
+    g_useOrbs = mod->getSettingValue<bool>("orbs");
+    g_useSpeeds = mod->getSettingValue<bool>("speed-portals");
+    g_useMinis = mod->getSettingValue<bool>("mini-portals");
+    g_modes.clear();
     for (int m = 0; m < MODE_COUNT; ++m)
-        if (mod->getSettingValue<bool>(MODE_KEY[m])) modes.push_back(m);
-    if (modes.empty()) modes.push_back(CUBE);
-    bool speeds = mod->getSettingValue<bool>("speed-portals");
-    bool minis = mod->getSettingValue<bool>("mini-portals");
-    bool orbs = mod->getSettingValue<bool>("orbs");
-    int cur = CUBE;                                  // the player starts as a cube
-    bool mini = false;
-    float x = 105.f;
-    if (std::find(modes.begin(), modes.end(), (int)CUBE) != modes.end()) x = frand(900.f, 1800.f);   // cube for a while
-    float total = x + (float)mod->getSettingValue<int64_t>("length") * 390.f;
-    if (orbs && x > 600.f) orbRow(lel, 250.f, x, {});                  // the opening cube stretch
-    while (x < total) {
-        int next = modes[irand(0, (int)modes.size() - 1)];
-        if (modes.size() > 1)
-            while (next == cur) next = modes[irand(0, (int)modes.size() - 1)];
-        if (next != cur) {
-            portalStack(lel, PORTAL_ID[next], x, 43.f);
-            cur = next;
-        }
-        float seg = frand(900.f, 2400.f);
-        std::vector<float> extra;
-        if (speeds && chance(0.6f)) {
-            extra.push_back(x + seg * frand(0.3f, 0.5f));
-            portalStack(lel, SPEED_ID[irand(1, 4)], extra.back(), 22.f);
-        }
-        if (minis && chance(0.3f)) {
-            mini = !mini;
-            extra.push_back(x + seg * frand(0.6f, 0.8f));
-            portalStack(lel, mini ? ID_MINI_ON : ID_MINI_OFF, extra.back(), 43.f);
-        }
-        if (orbs && (cur == CUBE || cur == ROBOT)) orbRow(lel, x, x + seg, extra);
-        x += seg;
-    }
+        if (mod->getSettingValue<bool>(MODE_KEY[m])) g_modes.push_back(m);
+    if (g_modes.empty()) g_modes.push_back(CUBE);
+    bool cubeFirst = std::find(g_modes.begin(), g_modes.end(), (int)CUBE) != g_modes.end();
+    g_modeTimer = cubeFirst ? frand(3.f, 6.f) : 0.6f;        // cube is not selected: switch away from it right at the start
+    g_speedTimer = frand(5.f, 10.f);
+    g_miniTimer = frand(8.f, 16.f);
+    g_orbCooldown = 0.f;
+    g_lastPortalX = -1000.f;
 }
 
-// ---- while playing ----------------------------------------------------------------------------------
-static void record(PlayerObject* p, float dt) {
-    if (!p || p->m_isDead) return;
+// ---- while playing: things placed AT the player (they take effect immediately) ----------------------
+static void portalAtPlayer(LevelEditorLayer* lel, PlayerObject* p, int id, float halfH) {
     auto pos = p->getPosition();
-    if (!g_path.empty() && pos.x <= g_path.back().x + 0.01f) return;       // x must increase
-    int mode = CUBE;
-    if (p->m_isShip) mode = SHIP;
-    else if (p->m_isBall) mode = BALL;
-    else if (p->m_isBird) mode = UFO;
-    else if (p->m_isDart) mode = WAVE;
-    else if (p->m_isRobot) mode = ROBOT;
-    else if (p->m_isSpider) mode = SPIDER;
-    else if (p->m_isSwing) mode = SWING;
+    float x = pos.x + 30.f;
+    float y = std::max(pos.y, GROUND + halfH + 2.f);          // never sunk into the ground
+    if (place(lel, id, x, y)) {
+        g_portals.push_back({x, y, 20.f, halfH});
+        g_lastPortalX = x;
+    }
+}
+
+static void reactive(LevelEditorLayer* lel, PlayerObject* p, float dt) {
+    int mode = modeOf(p);
+    bool clicking = p->m_jumpBuffered;
+    auto pos = p->getPosition();
+    g_orbCooldown -= dt;
+
+    // a fresh click in mid-air becomes an orb jump: the orb is created right on the player
+    bool orbMode = mode == CUBE || mode == ROBOT || mode == BALL;
+    if (g_useOrbs && orbMode && clicking && !g_wasClicking && !p->m_isOnGround && p->m_stateRingJump &&
+        g_orbCooldown <= 0.f && pos.x - g_lastPortalX > 60.f) {
+        if (place(lel, ORB_ID[irand(0, 2)], pos.x, pos.y)) {
+            g_orbs.push_back({pos.x, pos.y, 18.f, 18.f});
+            g_orbCooldown = 0.12f;
+        }
+    }
+    g_wasClicking = clicking;
+
+    // portals appear in front of the player every few seconds
+    g_modeTimer -= dt;
+    g_speedTimer -= dt;
+    g_miniTimer -= dt;
+    bool spaced = pos.x - g_lastPortalX > 240.f;
+    if (g_modeTimer <= 0.f && spaced && g_modes.size() > 0) {
+        int next = g_modes[irand(0, (int)g_modes.size() - 1)];
+        if (g_modes.size() > 1)
+            while (next == mode) next = g_modes[irand(0, (int)g_modes.size() - 1)];
+        if (next != mode) portalAtPlayer(lel, p, PORTAL_ID[next], 43.f);
+        g_modeTimer = frand(4.f, 9.f);
+    } else if (g_useSpeeds && g_speedTimer <= 0.f && spaced) {
+        portalAtPlayer(lel, p, SPEED_ID[irand(1, 4)], 22.f);
+        g_speedTimer = frand(5.f, 11.f);
+    } else if (g_useMinis && g_miniTimer <= 0.f && spaced) {
+        portalAtPlayer(lel, p, p->m_vehicleSize < 0.9f ? ID_MINI_OFF : ID_MINI_ON, 43.f);
+        g_miniTimer = frand(8.f, 16.f);
+    }
+}
+
+static bool record(PlayerObject* p, float dt) {
+    if (!p || p->m_isDead) return false;
+    auto pos = p->getPosition();
+    if (!g_path.empty() && pos.x <= g_path.back().x + 0.01f) return false;     // paused, or not moving forward
+    auto size = p->getObjectRect().size;
+    float hw = std::clamp(size.width / 2.f, 5.f, 15.f), hh = std::clamp(size.height / 2.f, 5.f, 15.f);
     float v = (!g_path.empty() && dt > 0.f) ? (pos.x - g_path.back().x) / dt : 311.58f;
-    g_path.push_back({pos.x, pos.y, v, mode, (bool)p->m_isOnGround, p->m_vehicleSize < 0.9f});
+    g_path.push_back({pos.x, pos.y, v, hw, hh, modeOf(p), (bool)p->m_isOnGround, p->m_vehicleSize < 0.9f});
+    return true;
 }
 
-static void step(LevelEditorLayer* lel, size_t idx);
-
-// ---- after the playtest: build the layout -----------------------------------------------------------
+// ---- obstacles built behind the player --------------------------------------------------------------
 struct Jump { size_t i0, i1; bool fp = false; };     // i0 = last grounded sample, i1 = first grounded sample after the jump
-
-static void keepTouchedPortals(LevelEditorLayer* lel) {
-    std::vector<Portal> kept;
-    for (auto& p : g_portals) {
-        Box b{p.x - p.halfW - 8.f, p.y - p.halfH - 8.f, p.x + p.halfW + 8.f, p.y + p.halfH + 8.f};
-        bool touched = !g_path.empty() && p.x <= g_path.back().x && !valid(b, 0.f);
-        if (touched) kept.push_back(p);
-        else if (p.obj && p.obj->getParent()) lel->removeObject(p.obj, true);
-    }
-    g_portals.swap(kept);
-    std::vector<Portal> keptOrbs;
-    for (auto& o : g_orbs) {
-        Box b{o.x - 20.f, o.y - 20.f, o.x + 20.f, o.y + 20.f};
-        bool touched = !g_path.empty() && o.x <= g_path.back().x && !valid(b, 0.f);
-        if (touched) keptOrbs.push_back(o);
-        else if (o.obj && o.obj->getParent()) lel->removeObject(o.obj, true);
-    }
-    g_orbs.swap(keptOrbs);
-}
 
 // true if the path went through a jump orb somewhere between x0 and x1
 static bool orbUsed(float x0, float x1) {
     for (auto& o : g_orbs)
-        if (o.x > x0 && o.x < x1 && !valid(Box{o.x - 20.f, o.y - 20.f, o.x + 20.f, o.y + 20.f}, 0.f)) return true;
+        if (o.x > x0 && o.x < x1) return true;
     return false;
 }
 
 static void buildJump(LevelEditorLayer* lel, const Jump& j) {
-    float density = g_density, fps = g_fps;
     const Sample& a = g_path[j.i0];
     const Sample& b = g_path[j.i1];
-    float gy = a.y - halfSize(a) + 15.f;              // centre height of an object standing on the ground
+    float gy = a.y - a.hh + 15.f;                     // centre height of an object standing where the player stood
     if (std::fabs(b.y - a.y) > 4.f) return;           // only jumps that land on the same height
     if (j.fp) {
-        float w = (a.v > 100.f ? a.v : 311.58f) / fps;                      // distance travelled in one frame
+        float w = (a.v > 100.f ? a.v : 311.58f) / g_fps;                    // distance travelled in one frame
         float m = std::max(0.5f, w * 0.5f);
         float first = 0.f, last = 0.f;
         for (float x = a.x + 6.f; x < a.x + 70.f && x < b.x; x += 0.5f)     // as close to the takeoff as the path allows
@@ -252,35 +240,35 @@ static void buildJump(LevelEditorLayer* lel, const Jump& j) {
         for (float x = b.x - 6.f; x > b.x - 70.f && x > a.x; x -= 0.5f)     // as close to the landing as the path allows
             if (valid(spikeBox(x, gy, false), m)) { last = x; break; }
         if (first == 0.f || last == 0.f || last < first) return;
-        obstacle(lel, ID_SPIKE, first, gy);
-        if (last - first > 12.f) obstacle(lel, ID_SPIKE, last, gy);
+        place(lel, ID_SPIKE, first, gy);
+        if (last - first > 12.f) place(lel, ID_SPIKE, last, gy);
         for (float x = first + 30.f; x < last - 20.f; x += 30.f)
-            if (valid(spikeBox(x, gy, false), 1.5f)) obstacle(lel, ID_SPIKE, x, gy);
+            if (valid(spikeBox(x, gy, false), 1.5f)) place(lel, ID_SPIKE, x, gy);
         return;
     }
-    // normal jump: up to three spikes under the arc, sometimes a block with a spike on top
     std::vector<float> xs;
     for (float x = std::floor(a.x / 30.f) * 30.f + 15.f; x < b.x; x += 30.f)
         if (x > a.x && !nearPortal(x) && valid(spikeBox(x, gy, false), 5.f)) xs.push_back(x);
     if (xs.empty()) return;
-    if (orbUsed(a.x, b.x)) {                          // orb jump: spikes all the way under it, so the orb is really needed
-        for (float x : xs) obstacle(lel, ID_SPIKE, x, gy);
+    if (orbUsed(a.x, b.x)) {                          // orb jump: spikes all the way under it, so the orbs are really needed
+        for (float x : xs) place(lel, ID_SPIKE, x, gy);
         return;
     }
+    // normal jump: up to three spikes under the arc, sometimes a block with a spike on top
     size_t mid = xs.size() / 2;
     if (chance(0.35f) && valid(blockBox(xs[mid], gy), 3.f) && valid(spikeBox(xs[mid], gy + 30.f, false), 3.f)) {
-        obstacle(lel, ID_BLOCK, xs[mid], gy);
-        obstacle(lel, ID_SPIKE, xs[mid], gy + 30.f);
+        place(lel, ID_BLOCK, xs[mid], gy);
+        place(lel, ID_SPIKE, xs[mid], gy + 30.f);
         return;
     }
-    int want = 1 + (chance(density) ? 1 : 0) + (chance(density * 0.6f) ? 1 : 0);
+    int want = 1 + (chance(g_density) ? 1 : 0) + (chance(g_density * 0.6f) ? 1 : 0);
     size_t from = mid >= (size_t)(want / 2) ? mid - want / 2 : 0;
-    for (size_t k = from; k < xs.size() && k < from + want; ++k) obstacle(lel, ID_SPIKE, xs[k], gy);
+    for (size_t k = from; k < xs.size() && k < from + want; ++k) place(lel, ID_SPIKE, xs[k], gy);
 }
 
 // one 30-unit column at x: hanging block for cube / robot, floor + ceiling of a corridor for every other gamemode
 static void buildColumn(LevelEditorLayer* lel, float x) {
-    if (x <= g_doneX + 60.f || nearPortal(x)) return;
+    if (nearPortal(x)) return;
     auto it = std::lower_bound(g_path.begin(), g_path.end(), x - 20.f, [](const Sample& s, float v) { return s.x < v; });
     if (it == g_path.end()) return;
     float ymin = 1e9f, ymax = -1e9f, half = 15.f;
@@ -289,52 +277,53 @@ static void buildColumn(LevelEditorLayer* lel, float x) {
     for (auto k = it; k != g_path.end() && k->x <= x + 20.f; ++k) {
         ymin = std::min(ymin, k->y);
         ymax = std::max(ymax, k->y);
-        half = halfSize(*k);
+        half = k->hh;
         grounded = grounded && k->ground;
         sameMode = sameMode && k->mode == mode;
     }
     if (ymin > ymax || !sameMode) return;
     if (mode == CUBE || mode == ROBOT) {
         if (!grounded || !chance(g_density * 0.25f)) return;
-        float by = ymin - half + 15.f + 90.f;                              // block hanging three blocks above the ground
+        float by = ymin - half + 15.f + 90.f;                              // block hanging three blocks above the feet
         if (!valid(blockBox(x, by), 4.f)) return;
-        obstacle(lel, ID_BLOCK, x, by);
-        if (chance(0.6f) && valid(spikeBox(x, by - 30.f, true), 4.f)) obstacle(lel, ID_SPIKE, x, by - 30.f, 180.f);
-        if (valid(spikeBox(x, by + 30.f, false), 4.f)) obstacle(lel, ID_SPIKE, x, by + 30.f);       // nobody rides on top of it
+        place(lel, ID_BLOCK, x, by);
+        if (chance(0.6f) && valid(spikeBox(x, by - 30.f, true), 4.f)) place(lel, ID_SPIKE, x, by - 30.f, true);
+        if (valid(spikeBox(x, by + 30.f, false), 4.f)) place(lel, ID_SPIKE, x, by + 30.f);          // nobody rides on top of it
         return;
     }
     float gap = g_baseGap + frand(0.f, 12.f);
+    float lowest = GROUND + 15.f;
     // Walls are solid all the way down to the ground and up to WALL_TOP, so the only way through is the corridor itself
     // (no flying over or under it). Every single block is still checked against the path.
-    float fy = std::floor((ymin - half - gap) / 30.f) * 30.f - 15.f;       // floor
-    if (fy >= 15.f && valid(blockBox(x, fy), 1.f)) {
-        obstacle(lel, ID_BLOCK, x, fy);
-        for (float y = fy - 30.f; y >= 15.f; y -= 30.f)
-            if (valid(blockBox(x, y), 1.f)) obstacle(lel, ID_BLOCK, x, y);
-        if (chance(g_density * 0.5f) && valid(spikeBox(x, fy + 30.f, false), 2.f)) obstacle(lel, ID_SPIKE, x, fy + 30.f);
+    float fy = std::floor((ymin - half - gap - GROUND) / 30.f) * 30.f + GROUND - 15.f;      // floor
+    if (fy >= lowest && valid(blockBox(x, fy), 1.f)) {
+        place(lel, ID_BLOCK, x, fy);
+        for (float y = fy - 30.f; y >= lowest; y -= 30.f)
+            if (valid(blockBox(x, y), 1.f)) place(lel, ID_BLOCK, x, y);
+        if (chance(g_density * 0.5f) && valid(spikeBox(x, fy + 30.f, false), 2.f)) place(lel, ID_SPIKE, x, fy + 30.f);
     }
-    float cy = std::ceil((ymax + half + gap) / 30.f) * 30.f + 15.f;        // ceiling
+    float cy = std::ceil((ymax + half + gap - GROUND) / 30.f) * 30.f + GROUND + 15.f;       // ceiling
     if (cy <= WALL_TOP && valid(blockBox(x, cy), 1.f)) {
-        obstacle(lel, ID_BLOCK, x, cy);
+        place(lel, ID_BLOCK, x, cy);
         for (float y = cy + 30.f; y <= WALL_TOP; y += 30.f)
-            if (valid(blockBox(x, y), 1.f)) obstacle(lel, ID_BLOCK, x, y);
-        if (chance(g_density * 0.5f) && valid(spikeBox(x, cy - 30.f, true), 2.f)) obstacle(lel, ID_SPIKE, x, cy - 30.f, 180.f);
+            if (valid(blockBox(x, y), 1.f)) place(lel, ID_BLOCK, x, y);
+        if (chance(g_density * 0.5f) && valid(spikeBox(x, cy - 30.f, true), 2.f)) place(lel, ID_SPIKE, x, cy - 30.f, true);
     }
 }
 
-// A kept portal must not be avoidable: wall off everything above and below it at the same x.
+// A portal must not be avoidable: wall off everything above and below it at the same x.
 static void framePortals(LevelEditorLayer* lel) {
     for (auto& p : g_portals) {
         auto freeCell = [&](float y) {
             Box b = blockBox(p.x, y);
-            for (auto& q : g_portals)                                       // never cover another kept portal
+            for (auto& q : g_portals)                                       // never cover another portal
                 if (std::fabs(q.x - p.x) < 40.f && b.y0 < q.y + q.halfH + 4.f && b.y1 > q.y - q.halfH - 4.f) return false;
             return valid(b, 1.f);
         };
-        for (float y = std::ceil((p.y + p.halfH + 15.f) / 30.f) * 30.f + 15.f; y <= WALL_TOP; y += 30.f)
-            if (freeCell(y)) obstacle(lel, ID_BLOCK, p.x, y);
-        for (float y = std::floor((p.y - p.halfH - 15.f) / 30.f) * 30.f - 15.f; y >= 15.f; y -= 30.f)
-            if (freeCell(y)) obstacle(lel, ID_BLOCK, p.x, y);
+        for (float y = std::ceil((p.y + p.halfH - GROUND) / 30.f) * 30.f + GROUND + 15.f; y <= WALL_TOP; y += 30.f)
+            if (freeCell(y)) place(lel, ID_BLOCK, p.x, y);
+        for (float y = std::floor((p.y - p.halfH - GROUND) / 30.f) * 30.f + GROUND - 15.f; y >= GROUND + 15.f; y -= 30.f)
+            if (freeCell(y)) place(lel, ID_BLOCK, p.x, y);
     }
 }
 
@@ -345,22 +334,33 @@ static void step(LevelEditorLayer* lel, size_t idx) {
     const Sample& prev = g_path[idx - 1];
     const Sample& cur = g_path[idx];
     bool jumpMode = cur.mode == CUBE || cur.mode == ROBOT;
-    if (g_airStart >= 0 && (cur.mode != g_path[(size_t)g_airStart].mode)) g_airStart = -1;      // changed gamemode mid-air
+    if (g_airStart >= 0 && cur.mode != g_path[(size_t)g_airStart].mode) g_airStart = -1;        // changed gamemode mid-air
     if (jumpMode && prev.ground && !cur.ground && prev.mode == cur.mode) g_airStart = (long long)idx - 1;
     else if (g_airStart >= 0 && cur.ground) {
         Jump j{(size_t)g_airStart, idx};
         g_airStart = -1;
         const Sample& a = g_path[j.i0];
-        if (a.x > g_doneX + 60.f) {
-            if (g_fpLeft > 0 && chance(0.25f) && !nearPortal(a.x) && !nearPortal(cur.x)) { j.fp = true; --g_fpLeft; ++g_fpMade; }
-            buildJump(lel, j);
+        if (g_fpLeft > 0 && chance(0.25f) && !nearPortal(a.x) && !nearPortal(cur.x) && !orbUsed(a.x, cur.x)) {
+            j.fp = true;
+            --g_fpLeft;
+            ++g_fpMade;
         }
+        buildJump(lel, j);
     }
     if (g_nextCol == 0.f) g_nextCol = std::floor(g_path.front().x / 30.f) * 30.f + 75.f;
     while (g_nextCol + 60.f < cur.x) {
         buildColumn(lel, g_nextCol);
         g_nextCol += 30.f;
     }
+}
+
+// called every frame of the playtest
+static void tick(LevelEditorLayer* lel, float dt) {
+    auto p = lel->m_player1;
+    if (!p || p->m_isDead) return;
+    if (!record(p, dt)) return;
+    reactive(lel, p, dt);
+    if (g_live) step(lel, g_path.size() - 1);
 }
 
 static void finish(LevelEditorLayer* lel) {
@@ -370,12 +370,31 @@ static void finish(LevelEditorLayer* lel) {
     }
     if (!g_live)
         for (size_t i = 1; i < g_path.size(); ++i) step(lel, i);
-    keepTouchedPortals(lel);
     framePortals(lel);
-    auto msg = fmt::format("Auto Layout: {} objects, {} frame perfects", g_obstacles.size(), g_fpMade);
+    auto msg = fmt::format("Auto Layout: {} objects, {} orbs, {} frame perfects", g_objects, g_orbs.size(), g_fpMade);
     Notification::create(msg, NotificationIcon::Success)->show();
     log::info("{} (path samples: {})", msg, g_path.size());
 }
+
+// runs the generator once per frame, from the scheduler (a safe place to create objects during a playtest)
+class Ticker : public CCNode {
+public:
+    static Ticker* create() {
+        auto ret = new Ticker();
+        if (ret->init()) {
+            ret->autorelease();
+            ret->scheduleUpdate();
+            return ret;
+        }
+        delete ret;
+        return nullptr;
+    }
+
+    void update(float dt) override {
+        if (!g_recording) return;
+        if (auto lel = LevelEditorLayer::get()) tick(lel, dt);
+    }
+};
 
 } // namespace gen
 
@@ -402,7 +421,7 @@ class $modify(GenEditorUI, EditorUI) {
     }
 
     void onGenSettings(CCObject*) {
-        geode::openSettingsPopup(Mod::get());
+        geode::openSettingsPopup(Mod::get(), false);
     }
 
     void onToggleGen(CCObject*) {
@@ -412,8 +431,14 @@ class $modify(GenEditorUI, EditorUI) {
 };
 
 class $modify(GenEditorLayer, LevelEditorLayer) {
+    bool init(GJGameLevel* level, bool noUI) {
+        if (!LevelEditorLayer::init(level, noUI)) return false;
+        if (auto ticker = gen::Ticker::create()) this->addChild(ticker);
+        return true;
+    }
+
     void onPlaytest() {
-        if (gen::g_armed) gen::prepare(this);             // portals must exist before the playtest starts
+        if (gen::g_armed) gen::beginRun(this);            // clear the previous result before the playtest starts
         LevelEditorLayer::onPlaytest();
         gen::g_recording = gen::g_armed;
     }
@@ -422,19 +447,6 @@ class $modify(GenEditorLayer, LevelEditorLayer) {
         bool was = gen::g_recording;
         gen::g_recording = false;
         LevelEditorLayer::onStopPlaytest();
-        if (was) {
-            gen::finish(this);                            // GEN stays on until the player turns it off
-        }
-    }
-};
-
-class $modify(GenGameLayer, GJBaseGameLayer) {
-    void update(float dt) {
-        GJBaseGameLayer::update(dt);
-        if (!gen::g_recording) return;
-        size_t before = gen::g_path.size();
-        gen::record(m_player1, dt);
-        if (gen::g_live && gen::g_owner && gen::g_path.size() > before)
-            gen::step(gen::g_owner, gen::g_path.size() - 1);          // build right behind the player, while they play
+        if (was) gen::finish(this);                       // GEN stays on until the player turns it off
     }
 };

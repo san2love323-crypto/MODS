@@ -5,7 +5,7 @@
 	},
 	"id": "yujun566.autolayout",
 	"name": "Auto Layout",
-	"version": "v1.2.0",
+	"version": "v1.4.0",
 	"developer": "yujun566",
 	"description": "Play an empty level in the editor and a layout is generated around the path you played.",
 	"tags": [
@@ -104,6 +104,12 @@
 		},
 		"speed-portals": {
 			"name": "Random speed portals",
+			"type": "bool",
+			"default": true
+		},
+		"orbs": {
+			"name": "Jump orbs",
+			"description": "Yellow, pink and red orbs are offered in cube / robot parts. Orbs you do not touch are removed afterwards.",
 			"type": "bool",
 			"default": true
 		},

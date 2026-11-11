@@ -1,0 +1,16 @@
+{
+  "geode": "5.9.0",
+  "gd": { "win": "2.2081" },
+  "id": "matjang.ghostbet",
+  "name": "Ghost & Bet",
+  "version": "v1.0.0",
+  "developer": "matjang",
+  "description": "Race a ghost of your best run, and bet points on how far you will get.",
+  "tags": ["gameplay", "interface"],
+  "settings": {
+    "ghost": { "type": "bool", "default": true, "name": "Ghost", "description": "Show a see-through copy of your best run." },
+    "ghost-opacity": { "type": "int", "default": 110, "min": 30, "max": 255, "name": "Ghost opacity", "control": { "slider": true } },
+    "taunts": { "type": "bool", "default": true, "name": "Death taunts", "description": "Show a short line every time you die." },
+    "hud": { "type": "bool", "default": true, "name": "Bet HUD", "description": "Show your active bet while playing." }
+  }
+}

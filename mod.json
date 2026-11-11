@@ -5,7 +5,7 @@
 	},
 	"id": "yujun566.autolayout",
 	"name": "Auto Layout",
-	"version": "v2.0.0",
+	"version": "v3.1.0",
 	"developer": "yujun566",
 	"description": "Play in the editor and a layout builds itself around you: orbs where you click, portals, blocks and spikes.",
 	"tags": [
@@ -79,9 +79,17 @@
 				"240"
 			]
 		},
+		"fp-leniency": {
+			"name": "Frame perfect leniency",
+			"description": "Extra room around frame-perfect spikes, in units (a block is 30). 0 = a true one-frame window, higher = easier.",
+			"type": "float",
+			"default": 2.0,
+			"min": 0.0,
+			"max": 10.0
+		},
 		"difficulty": {
 			"name": "Difficulty (1-5)",
-			"description": "How close blocks and spikes are placed to your path.",
+			"description": "1 = wide and simple, 5 = tight. Changes wall distance, spike rows, speeds, which orbs appear, straight-fly tunnels and more.",
 			"type": "int",
 			"default": 3,
 			"min": 1,
@@ -102,7 +110,25 @@
 		},
 		"orbs": {
 			"name": "Jump orbs",
-			"description": "Clicking in mid-air (cube, robot, ball) creates a jump orb right where you are.",
+			"description": "Clicking in mid-air (cube, robot, ball) creates an orb right where you are. Harder difficulties add red, black and dash orbs.",
+			"type": "bool",
+			"default": true
+		},
+		"pads": {
+			"name": "Jump pads",
+			"description": "Pads appear in front of your feet in cube / robot parts.",
+			"type": "bool",
+			"default": true
+		},
+		"platforms": {
+			"name": "Platforms (stairs)",
+			"description": "Some jumps end on a new platform that appears under you, so the level climbs like stairs.",
+			"type": "bool",
+			"default": true
+		},
+		"gravity-portals": {
+			"name": "Gravity portals",
+			"description": "Upside-down flying in ship / UFO / wave / swing parts (difficulty 3 and up).",
 			"type": "bool",
 			"default": true
 		},

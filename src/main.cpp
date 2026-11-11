@@ -1,9 +1,10 @@
 // Auto Layout - generates a layout around the path the player actually played in an editor playtest.
 //
 // Flow (GEN button ON):
-//   playtest starts -> old generated objects are removed, random gamemode / speed / mini portals are placed ahead
-//   while playing   -> the player's position, gamemode and state are sampled every frame
-//   playtest stops  -> blocks and spikes are placed around the sampled path; untouched portals are removed
+//   playtest starts -> everything generated earlier is removed, random gamemode / speed / mini portals are placed ahead
+//   while playing   -> the player's position, gamemode and state are sampled every frame and, in live mode,
+//                      blocks and spikes appear right behind the player while they play
+//   playtest stops  -> portals the player never touched are removed (and, with live mode off, everything is built now)
 //
 // Every obstacle is checked against the recorded path with conservative (slightly too large) hitboxes,
 // so the level is always beatable with the inputs that were recorded.
@@ -11,6 +12,7 @@
 #include <Geode/modify/LevelEditorLayer.hpp>
 #include <Geode/modify/EditorUI.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
+#include <Geode/ui/GeodeUI.hpp>
 #include <vector>
 #include <random>
 #include <algorithm>
@@ -26,6 +28,7 @@ enum Mode { CUBE, SHIP, BALL, UFO, WAVE, ROBOT, SPIDER, SWING, MODE_COUNT };
 static const int   PORTAL_ID[MODE_COUNT] = {12, 13, 47, 111, 660, 745, 1331, 1933};
 static const char* MODE_KEY[MODE_COUNT]  = {"mode-cube", "mode-ship", "mode-ball", "mode-ufo", "mode-wave", "mode-robot", "mode-spider", "mode-swing"};
 static const int   SPEED_ID[5] = {200, 201, 202, 203, 1334};
+constexpr int GEN_LAYER = 77;                        // editor layer that marks generated objects
 constexpr int ID_BLOCK = 1, ID_SPIKE = 8, ID_MINI_ON = 101, ID_MINI_OFF = 99;
 
 struct Sample { float x, y, v; int mode; bool ground, mini; };
@@ -39,6 +42,13 @@ static ButtonSprite* g_label = nullptr;
 static std::vector<Sample> g_path;
 static std::vector<Ref<GameObject>> g_obstacles;
 static std::vector<Portal> g_portals;
+// state of the current run
+static bool  g_live = true;
+static float g_doneX = 0.f;                          // everything up to here already existed: never generate there
+static float g_nextCol = 0.f;                        // next 30-unit column to build
+static long long g_airStart = -1;                    // index of the last grounded sample before the current jump
+static int   g_fpLeft = 0, g_fpMade = 0;
+static float g_density = 0.6f, g_baseGap = 33.f, g_fps = 240.f;
 static std::mt19937 g_rng{(unsigned)std::chrono::steady_clock::now().time_since_epoch().count()};
 
 static float frand(float a, float b) { return std::uniform_real_distribution<float>(a, b)(g_rng); }
@@ -53,6 +63,7 @@ static void setLabel() {
 static GameObject* place(LevelEditorLayer* lel, int id, float x, float y, float rot = 0.f) {
     auto obj = lel->createObject(id, ccp(x, y), true);
     if (obj && rot != 0.f) obj->setRotation(rot);
+    if (obj) obj->m_editorLayer = GEN_LAYER;
     return obj;
 }
 
@@ -90,18 +101,31 @@ static bool nearPortal(float x) {
     return false;
 }
 
-// ---- before the playtest: wipe the previous result, place random portals ---------------------------
-static void wipe(LevelEditorLayer* lel) {
-    if (g_owner == lel) {
-        for (auto& o : g_obstacles)
-            if (o && o->getParent()) lel->removeObject(o, true);
-        for (auto& p : g_portals)
-            if (p.obj && p.obj->getParent()) lel->removeObject(p.obj, true);
-    }
+// ---- before the playtest: place random portals past the existing content ---------------------------
+static void beginRun(LevelEditorLayer* lel) {
     g_obstacles.clear();
     g_portals.clear();
     g_path.clear();
     g_owner = lel;
+    g_doneX = 0.f;
+    // remove everything this mod generated before (it is all on editor layer GEN_LAYER), then build over the whole level again
+    if (lel->m_objects) {
+        std::vector<Ref<GameObject>> old;
+        for (auto obj : CCArrayExt<GameObject*>(lel->m_objects))
+            if (obj && obj->m_editorLayer == GEN_LAYER) old.push_back(obj);
+        for (auto& obj : old) lel->removeObject(obj, true);
+    }
+    auto mod = Mod::get();
+    g_live = mod->getSettingValue<bool>("live");
+    g_density = (float)mod->getSettingValue<double>("density");
+    static const float GAPS[5] = {60.f, 45.f, 33.f, 24.f, 16.f};
+    g_baseGap = GAPS[std::clamp((int)mod->getSettingValue<int64_t>("difficulty"), 1, 5) - 1];
+    g_fps = (float)std::atof(mod->getSettingValue<std::string>("fp-fps").c_str());
+    if (g_fps < 30.f) g_fps = 240.f;
+    g_fpLeft = (int)mod->getSettingValue<int64_t>("fp-count");
+    g_fpMade = 0;
+    g_airStart = -1;
+    g_nextCol = 0.f;
 }
 
 // portals are stacked over the whole play height so they are hit no matter where the player flies
@@ -111,7 +135,7 @@ static void portalStack(LevelEditorLayer* lel, int id, float x, float halfH) {
 }
 
 static void prepare(LevelEditorLayer* lel) {
-    wipe(lel);
+    beginRun(lel);
     auto mod = Mod::get();
     std::vector<int> modes;
     for (int m = 0; m < MODE_COUNT; ++m)
@@ -119,17 +143,16 @@ static void prepare(LevelEditorLayer* lel) {
     if (modes.empty()) modes.push_back(CUBE);
     bool speeds = mod->getSettingValue<bool>("speed-portals");
     bool minis = mod->getSettingValue<bool>("mini-portals");
-    float total = (float)mod->getSettingValue<int64_t>("length") * 390.f;
-
-    int cur = CUBE;
+    int cur = CUBE;                                  // the player starts as a cube
     bool mini = false;
     float x = 105.f;
-    if (std::find(modes.begin(), modes.end(), (int)CUBE) != modes.end()) x = frand(900.f, 1800.f);   // start as cube for a while
+    if (std::find(modes.begin(), modes.end(), (int)CUBE) != modes.end()) x = frand(900.f, 1800.f);   // cube for a while
+    float total = x + (float)mod->getSettingValue<int64_t>("length") * 390.f;
     while (x < total) {
         int next = modes[irand(0, (int)modes.size() - 1)];
         if (modes.size() > 1)
             while (next == cur) next = modes[irand(0, (int)modes.size() - 1)];
-        if (next != cur || x < 200.f) {
+        if (next != cur) {
             portalStack(lel, PORTAL_ID[next], x, 43.f);
             cur = next;
         }
@@ -160,6 +183,8 @@ static void record(PlayerObject* p, float dt) {
     g_path.push_back({pos.x, pos.y, v, mode, (bool)p->m_isOnGround, p->m_vehicleSize < 0.9f});
 }
 
+static void step(LevelEditorLayer* lel, size_t idx);
+
 // ---- after the playtest: build the layout -----------------------------------------------------------
 struct Jump { size_t i0, i1; bool fp = false; };     // i0 = last grounded sample, i1 = first grounded sample after the jump
 
@@ -174,7 +199,8 @@ static void keepTouchedPortals(LevelEditorLayer* lel) {
     g_portals.swap(kept);
 }
 
-static void buildJump(LevelEditorLayer* lel, const Jump& j, float density, float fps) {
+static void buildJump(LevelEditorLayer* lel, const Jump& j) {
+    float density = g_density, fps = g_fps;
     const Sample& a = g_path[j.i0];
     const Sample& b = g_path[j.i1];
     float gy = a.y - halfSize(a) + 15.f;              // centre height of an object standing on the ground
@@ -210,106 +236,81 @@ static void buildJump(LevelEditorLayer* lel, const Jump& j, float density, float
     for (size_t k = from; k < xs.size() && k < from + want; ++k) obstacle(lel, ID_SPIKE, xs[k], gy);
 }
 
-// cube / robot: spikes under every jump, hanging blocks over the running parts
-static void buildGround(LevelEditorLayer* lel, size_t s0, size_t s1, std::vector<Jump>& jumps, float density, float fps) {
-    for (auto& j : jumps)
-        if (j.i0 >= s0 && j.i1 <= s1) buildJump(lel, j, density, fps);
-    float gy = g_path[s0].y - halfSize(g_path[s0]) + 15.f;
-    for (float x = std::floor(g_path[s0].x / 30.f) * 30.f + 75.f; x < g_path[s1].x - 60.f; x += 30.f) {
-        if (nearPortal(x) || !chance(density * 0.25f)) continue;
-        float by = gy + 90.f;                                               // block hanging three blocks up
-        if (!valid(blockBox(x, by), 4.f)) continue;
+// one 30-unit column at x: hanging block for cube / robot, floor + ceiling of a corridor for every other gamemode
+static void buildColumn(LevelEditorLayer* lel, float x) {
+    if (x <= g_doneX + 60.f || nearPortal(x)) return;
+    auto it = std::lower_bound(g_path.begin(), g_path.end(), x - 20.f, [](const Sample& s, float v) { return s.x < v; });
+    if (it == g_path.end()) return;
+    float ymin = 1e9f, ymax = -1e9f, half = 15.f;
+    int mode = it->mode;
+    bool grounded = true, sameMode = true;
+    for (auto k = it; k != g_path.end() && k->x <= x + 20.f; ++k) {
+        ymin = std::min(ymin, k->y);
+        ymax = std::max(ymax, k->y);
+        half = halfSize(*k);
+        grounded = grounded && k->ground;
+        sameMode = sameMode && k->mode == mode;
+    }
+    if (ymin > ymax || !sameMode) return;
+    if (mode == CUBE || mode == ROBOT) {
+        if (!grounded || !chance(g_density * 0.25f)) return;
+        float by = ymin - half + 15.f + 90.f;                              // block hanging three blocks above the ground
+        if (!valid(blockBox(x, by), 4.f)) return;
         obstacle(lel, ID_BLOCK, x, by);
         if (chance(0.6f) && valid(spikeBox(x, by - 30.f, true), 4.f)) obstacle(lel, ID_SPIKE, x, by - 30.f, 180.f);
+        return;
+    }
+    float gap = g_baseGap + frand(0.f, 12.f);
+    float fy = std::floor((ymin - half - gap) / 30.f) * 30.f - 15.f;       // floor
+    if (fy >= 15.f && valid(blockBox(x, fy), 1.f)) {
+        obstacle(lel, ID_BLOCK, x, fy);
+        if (fy >= 45.f && chance(0.4f)) obstacle(lel, ID_BLOCK, x, fy - 30.f);
+        if (chance(g_density * 0.5f) && valid(spikeBox(x, fy + 30.f, false), 2.f)) obstacle(lel, ID_SPIKE, x, fy + 30.f);
+    }
+    float cy = std::ceil((ymax + half + gap) / 30.f) * 30.f + 15.f;        // ceiling
+    if (cy <= 345.f && valid(blockBox(x, cy), 1.f)) {
+        obstacle(lel, ID_BLOCK, x, cy);
+        if (chance(0.4f)) obstacle(lel, ID_BLOCK, x, cy + 30.f);
+        if (chance(g_density * 0.5f) && valid(spikeBox(x, cy - 30.f, true), 2.f)) obstacle(lel, ID_SPIKE, x, cy - 30.f, 180.f);
     }
 }
 
-// ship / ufo / wave / swing / ball / spider: a corridor of blocks and spikes that follows the path
-static void buildCorridor(LevelEditorLayer* lel, size_t s0, size_t s1, float baseGap, float density) {
-    size_t i = s0;
-    for (float x = std::floor(g_path[s0].x / 30.f) * 30.f + 75.f; x < g_path[s1].x - 60.f; x += 30.f) {
-        if (nearPortal(x)) continue;
-        while (i < s1 && g_path[i].x < x - 20.f) ++i;
-        float ymin = 1e9f, ymax = -1e9f, half = 15.f;
-        for (size_t k = i; k <= s1 && g_path[k].x <= x + 20.f; ++k) {
-            ymin = std::min(ymin, g_path[k].y);
-            ymax = std::max(ymax, g_path[k].y);
-            half = halfSize(g_path[k]);
+// advance the generator to path sample `idx`. Only looks at samples up to idx, so it can run while the player is playing:
+// a jump is built the moment the player lands, a column once the player is 60 units past it.
+static void step(LevelEditorLayer* lel, size_t idx) {
+    if (idx == 0 || idx >= g_path.size()) return;
+    const Sample& prev = g_path[idx - 1];
+    const Sample& cur = g_path[idx];
+    bool jumpMode = cur.mode == CUBE || cur.mode == ROBOT;
+    if (g_airStart >= 0 && (cur.mode != g_path[(size_t)g_airStart].mode)) g_airStart = -1;      // changed gamemode mid-air
+    if (jumpMode && prev.ground && !cur.ground && prev.mode == cur.mode) g_airStart = (long long)idx - 1;
+    else if (g_airStart >= 0 && cur.ground) {
+        Jump j{(size_t)g_airStart, idx};
+        g_airStart = -1;
+        const Sample& a = g_path[j.i0];
+        if (a.x > g_doneX + 60.f) {
+            if (g_fpLeft > 0 && chance(0.25f) && !nearPortal(a.x) && !nearPortal(cur.x)) { j.fp = true; --g_fpLeft; ++g_fpMade; }
+            buildJump(lel, j);
         }
-        if (ymin > ymax) continue;
-        float gap = baseGap + frand(0.f, 12.f);
-        // floor
-        float fy = std::floor((ymin - half - gap) / 30.f) * 30.f - 15.f;
-        if (fy >= 15.f && valid(blockBox(x, fy), 1.f)) {
-            obstacle(lel, ID_BLOCK, x, fy);
-            if (fy >= 45.f && chance(0.4f)) obstacle(lel, ID_BLOCK, x, fy - 30.f);
-            if (chance(density * 0.5f) && valid(spikeBox(x, fy + 30.f, false), 2.f)) obstacle(lel, ID_SPIKE, x, fy + 30.f);
-        }
-        // ceiling
-        float cy = std::ceil((ymax + half + gap) / 30.f) * 30.f + 15.f;
-        if (cy <= 345.f && valid(blockBox(x, cy), 1.f)) {
-            obstacle(lel, ID_BLOCK, x, cy);
-            if (chance(0.4f)) obstacle(lel, ID_BLOCK, x, cy + 30.f);
-            if (chance(density * 0.5f) && valid(spikeBox(x, cy - 30.f, true), 2.f)) obstacle(lel, ID_SPIKE, x, cy - 30.f, 180.f);
-        }
+    }
+    if (g_nextCol == 0.f) g_nextCol = std::floor(g_path.front().x / 30.f) * 30.f + 75.f;
+    while (g_nextCol + 60.f < cur.x) {
+        buildColumn(lel, g_nextCol);
+        g_nextCol += 30.f;
     }
 }
 
-static void generate(LevelEditorLayer* lel) {
+static void finish(LevelEditorLayer* lel) {
     if (g_path.size() < 20) {
         Notification::create("Auto Layout: nothing recorded", NotificationIcon::Error)->show();
         return;
     }
-    auto mod = Mod::get();
-    float density = (float)mod->getSettingValue<double>("density");
-    int difficulty = (int)mod->getSettingValue<int64_t>("difficulty");
-    int fpCount = (int)mod->getSettingValue<int64_t>("fp-count");
-    float fps = (float)std::atof(mod->getSettingValue<std::string>("fp-fps").c_str());
-    if (fps < 30.f) fps = 240.f;
-    static const float GAPS[5] = {60.f, 45.f, 33.f, 24.f, 16.f};
-    float baseGap = GAPS[std::clamp(difficulty, 1, 5) - 1];
-
+    if (!g_live)
+        for (size_t i = 1; i < g_path.size(); ++i) step(lel, i);
     keepTouchedPortals(lel);
-
-    // all cube / robot jumps, then pick which ones become frame perfects
-    std::vector<Jump> jumps;
-    for (size_t i = 1; i < g_path.size(); ++i) {
-        const Sample& prev = g_path[i - 1];
-        const Sample& cur = g_path[i];
-        if ((prev.mode == CUBE || prev.mode == ROBOT) && prev.ground && !cur.ground) {
-            size_t k = i;
-            while (k < g_path.size() && !g_path[k].ground && g_path[k].mode == prev.mode) ++k;
-            if (k < g_path.size() && g_path[k].ground && g_path[k].mode == prev.mode) jumps.push_back({i - 1, k});
-            i = k;
-        }
-    }
-    std::vector<size_t> order(jumps.size());
-    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
-    std::shuffle(order.begin(), order.end(), g_rng);
-    int fpMade = 0;
-    for (size_t i = 0; i < order.size() && fpMade < fpCount; ++i) {
-        const Jump& j = jumps[order[i]];
-        if (nearPortal(g_path[j.i0].x) || nearPortal(g_path[j.i1].x)) continue;
-        jumps[order[i]].fp = true;
-        ++fpMade;
-    }
-
-    // one segment per stretch of the same gamemode
-    size_t s0 = 0;
-    for (size_t i = 1; i <= g_path.size(); ++i) {
-        if (i == g_path.size() || g_path[i].mode != g_path[s0].mode) {
-            size_t s1 = i - 1;
-            if (s1 > s0 + 5) {
-                int mode = g_path[s0].mode;
-                if (mode == CUBE || mode == ROBOT) buildGround(lel, s0, s1, jumps, density, fps);
-                else buildCorridor(lel, s0, s1, baseGap, density);
-            }
-            s0 = i;
-        }
-    }
-    auto msg = fmt::format("Auto Layout: {} objects, {} frame perfects", g_obstacles.size(), fpMade);
+    auto msg = fmt::format("Auto Layout: {} objects, {} frame perfects", g_obstacles.size(), g_fpMade);
     Notification::create(msg, NotificationIcon::Success)->show();
-    log::info("{} (path samples: {}, jumps: {})", msg, g_path.size(), jumps.size());
+    log::info("{} (path samples: {})", msg, g_path.size());
 }
 
 } // namespace gen
@@ -322,13 +323,22 @@ class $modify(GenEditorUI, EditorUI) {
         auto spr = ButtonSprite::create("GEN: OFF", "goldFont.fnt", "GJ_button_04.png", 0.6f);
         spr->setScale(0.6f);
         auto btn = CCMenuItemSpriteExtra::create(spr, this, menu_selector(GenEditorUI::onToggleGen));
+        auto setSpr = ButtonSprite::create("Settings", "goldFont.fnt", "GJ_button_05.png", 0.6f);
+        setSpr->setScale(0.6f);
+        auto setBtn = CCMenuItemSpriteExtra::create(setSpr, this, menu_selector(GenEditorUI::onGenSettings));
         auto menu = CCMenu::create();
         menu->addChild(btn);
+        menu->addChild(setBtn);
+        menu->alignItemsHorizontallyWithPadding(6.f);
         auto win = CCDirector::sharedDirector()->getWinSize();
         menu->setPosition({win.width / 2.f, win.height - 62.f});
         this->addChild(menu, 100);
         gen::g_label = spr;
         return true;
+    }
+
+    void onGenSettings(CCObject*) {
+        geode::openSettingsPopup(Mod::get());
     }
 
     void onToggleGen(CCObject*) {
@@ -349,9 +359,7 @@ class $modify(GenEditorLayer, LevelEditorLayer) {
         gen::g_recording = false;
         LevelEditorLayer::onStopPlaytest();
         if (was) {
-            gen::generate(this);
-            gen::g_armed = false;                         // next playtest is a normal test of the result
-            gen::setLabel();
+            gen::finish(this);                            // GEN stays on until the player turns it off
         }
     }
 };
@@ -359,6 +367,10 @@ class $modify(GenEditorLayer, LevelEditorLayer) {
 class $modify(GenGameLayer, GJBaseGameLayer) {
     void update(float dt) {
         GJBaseGameLayer::update(dt);
-        if (gen::g_recording) gen::record(m_player1, dt);
+        if (!gen::g_recording) return;
+        size_t before = gen::g_path.size();
+        gen::record(m_player1, dt);
+        if (gen::g_live && gen::g_owner && gen::g_path.size() > before)
+            gen::step(gen::g_owner, gen::g_path.size() - 1);          // build right behind the player, while they play
     }
 };

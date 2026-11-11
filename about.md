@@ -1,11 +1,10 @@
-# Ghost & Bet
+# Auto Layout
 
-**Ghost** - your best run of each level is saved and plays back as a see-through icon next to you.
-When the ghost stops, that is where you died last time. Pass it and you get a "PASSED YOUR GHOST" banner.
+Builds a layout around the way **you** play.
 
-**Bet** - on a level page press **BET**, pick a target %, a stake and how many tries you get.
-Reach the target and you win points, run out of tries (or quit) and you lose the stake.
+1. Open an empty level in the editor and press the **GEN** button (top of the screen) so it says `GEN: ON`.
+2. Press playtest. Random gamemode / speed portals are placed ahead of you. Just play: jump, fly, click however you like.
+3. Stop the playtest. Blocks, spikes and frame-perfect jumps are generated around the exact path you took, so the level is always beatable the way you played it.
+4. `GEN` turns itself off, so the next playtest is a normal test of the result. Turn it on again to throw the result away and make a new one.
 
-**Shop** - spend points on trail colors and death-taunt packs.
-
-Practice mode and start positions never count.
+Settings: which gamemodes to use, how many frame perfects (60 / 120 / 240 fps), difficulty, density, length.

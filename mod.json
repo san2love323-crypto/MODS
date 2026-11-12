@@ -1,142 +1,22 @@
 {
-	"geode": "5.11.2",
-	"gd": {
-		"win": "2.2081"
-	},
-	"id": "yujun566.autolayout",
-	"name": "Auto Layout",
-	"version": "v3.1.0",
-	"developer": "yujun566",
-	"description": "Play in the editor and a layout builds itself around you: orbs where you click, portals, blocks and spikes.",
-	"tags": [
-		"editor",
-		"utility",
-		"offline"
-	],
-	"settings": {
-		"live": {
-			"name": "Build while playing",
-			"description": "Objects appear right behind you during the playtest. Turn off to build everything when the playtest stops.",
-			"type": "bool",
-			"default": true
-		},
-		"mode-cube": {
-			"name": "Mode: Cube",
-			"type": "bool",
-			"default": true
-		},
-		"mode-ship": {
-			"name": "Mode: Ship",
-			"type": "bool",
-			"default": true
-		},
-		"mode-ball": {
-			"name": "Mode: Ball",
-			"type": "bool",
-			"default": false
-		},
-		"mode-ufo": {
-			"name": "Mode: UFO",
-			"type": "bool",
-			"default": false
-		},
-		"mode-wave": {
-			"name": "Mode: Wave",
-			"type": "bool",
-			"default": true
-		},
-		"mode-robot": {
-			"name": "Mode: Robot",
-			"type": "bool",
-			"default": false
-		},
-		"mode-spider": {
-			"name": "Mode: Spider",
-			"type": "bool",
-			"default": false
-		},
-		"mode-swing": {
-			"name": "Mode: Swing",
-			"type": "bool",
-			"default": false
-		},
-		"fp-count": {
-			"name": "Frame perfects",
-			"description": "How many of your cube / robot jumps are turned into frame-perfect jumps.",
-			"type": "int",
-			"default": 3,
-			"min": 0,
-			"max": 50
-		},
-		"fp-fps": {
-			"name": "Frame perfect FPS",
-			"description": "240 = tightest timing window, 60 = widest.",
-			"type": "string",
-			"default": "240",
-			"one-of": [
-				"60",
-				"120",
-				"240"
-			]
-		},
-		"fp-leniency": {
-			"name": "Frame perfect leniency",
-			"description": "Extra room around frame-perfect spikes, in units (a block is 30). 0 = a true one-frame window, higher = easier.",
-			"type": "float",
-			"default": 2.0,
-			"min": 0.0,
-			"max": 10.0
-		},
-		"difficulty": {
-			"name": "Difficulty (1-5)",
-			"description": "1 = wide and simple, 5 = tight. Changes wall distance, spike rows, speeds, which orbs appear, straight-fly tunnels and more.",
-			"type": "int",
-			"default": 3,
-			"min": 1,
-			"max": 5
-		},
-		"density": {
-			"name": "Obstacle density",
-			"type": "float",
-			"default": 0.6,
-			"min": 0.1,
-			"max": 1.0
-		},
-		"speed-portals": {
-			"name": "Random speed portals",
-			"type": "bool",
-			"default": true,
-			"description": "A speed portal appears in front of you every few seconds."
-		},
-		"orbs": {
-			"name": "Jump orbs",
-			"description": "Clicking in mid-air (cube, robot, ball) creates an orb right where you are. Harder difficulties add red, black and dash orbs.",
-			"type": "bool",
-			"default": true
-		},
-		"pads": {
-			"name": "Jump pads",
-			"description": "Pads appear in front of your feet in cube / robot parts.",
-			"type": "bool",
-			"default": true
-		},
-		"platforms": {
-			"name": "Platforms (stairs)",
-			"description": "Some jumps end on a new platform that appears under you, so the level climbs like stairs.",
-			"type": "bool",
-			"default": true
-		},
-		"gravity-portals": {
-			"name": "Gravity portals",
-			"description": "Upside-down flying in ship / UFO / wave / swing parts (difficulty 3 and up).",
-			"type": "bool",
-			"default": true
-		},
-		"mini-portals": {
-			"name": "Random mini portals",
-			"type": "bool",
-			"default": false,
-			"description": "A mini / normal size portal appears in front of you now and then."
-		}
-	}
+  "geode": "5.9.0",
+  "gd": { "win": "2.2081" },
+  "id": "matjang.roulette",
+  "name": "Roulette Challenge",
+  "version": "v1.0.0",
+  "developer": "matjang",
+  "description": "Spin a roulette before a level and play it with one of 100 random handicaps. Clear the goal to win points.",
+  "tags": ["gameplay", "interface"],
+  "settings": {
+    "safe-mode": { "type": "bool", "default": true, "name": "Photosensitive safe mode", "description": "Never roll challenges with fast flashing or fast spinning." },
+    "spicy": { "type": "bool", "default": false, "name": "Spicy odds", "description": "Epic and Legendary challenges show up much more often." },
+    "hud": { "type": "bool", "default": true, "name": "Challenge HUD", "description": "Show the active challenge and goal while playing." },
+    "chaos-seconds": { "type": "int", "default": 0, "min": 0, "max": 60, "name": "Chaos mode (seconds)", "description": "If above 0, the handicap changes to a new random one every this many seconds.", "control": { "slider": true } },
+    "cat-world": { "type": "bool", "default": true, "name": "Category: Camera", "description": "Flips, tilts, zooms, shakes." },
+    "cat-overlay": { "type": "bool", "default": true, "name": "Category: Screen covers", "description": "Darkness, bars, tints." },
+    "cat-player": { "type": "bool", "default": true, "name": "Category: Icon", "description": "Invisible, giant, tiny icon." },
+    "cat-speed": { "type": "bool", "default": true, "name": "Category: Game speed", "description": "Slow motion, turbo, lag." },
+    "cat-text": { "type": "bool", "default": true, "name": "Category: Distractions", "description": "Flying text and fake messages." },
+    "cat-rules": { "type": "bool", "default": true, "name": "Category: Rules", "description": "Limited tries and harder goals." }
+  }
 }

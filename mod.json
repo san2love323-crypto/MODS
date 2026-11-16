@@ -5,17 +5,43 @@
 	},
 	"id": "yujun566.imagebg",
 	"name": "Image Background",
-	"version": "v1.0.0",
+	"version": "v2.0.0",
 	"developer": "yujun566",
-	"description": "Turns a picture into editor objects (coloured squares), so it can be used as a level background.",
+	"description": "Turns a picture into editor objects (painted with overlapping shapes), so it can be used as a level background.",
 	"tags": [
 		"editor",
 		"utility",
 		"offline"
 	],
 	"settings": {
+		"style": {
+			"name": "Style",
+			"description": "painting = soft overlapping brush strokes, looks like a real picture. pixels = a grid of squares.",
+			"type": "string",
+			"default": "painting",
+			"one-of": [
+				"painting",
+				"pixels"
+			]
+		},
+		"strokes": {
+			"name": "Painting: strokes",
+			"description": "How many brush strokes (= objects). More = more detail. 600 is a good start, 2000 is very detailed.",
+			"type": "int",
+			"default": 800,
+			"min": 50,
+			"max": 5000
+		},
+		"size": {
+			"name": "Painting: width in blocks",
+			"description": "How wide the finished picture is, in blocks.",
+			"type": "float",
+			"default": 20.0,
+			"min": 2.0,
+			"max": 200.0
+		},
 		"width": {
-			"name": "Width (cells)",
+			"name": "Pixels: width (cells)",
 			"description": "How many squares wide the picture is. More = sharper, but more objects.",
 			"type": "int",
 			"default": 80,
@@ -23,7 +49,7 @@
 			"max": 240
 		},
 		"cell": {
-			"name": "Cell size",
+			"name": "Pixels: cell size",
 			"description": "Size of one square in units (a block is 30). Picture width = width x cell size.",
 			"type": "float",
 			"default": 7.5,
@@ -31,7 +57,7 @@
 			"max": 30.0
 		},
 		"colors": {
-			"name": "Colour detail (1-5)",
+			"name": "Pixels: colour detail (1-5)",
 			"description": "Lower = fewer different colours, so more squares merge into long bars and the object count drops.",
 			"type": "int",
 			"default": 3,

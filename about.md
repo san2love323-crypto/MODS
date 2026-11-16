@@ -1,11 +1,11 @@
-# Roulette Challenge
+# Image Background
 
-Press **ROULETTE** on a level page, spin, and play the level with a random handicap.
-Reach the goal % to win points (shared with *Ghost & Bet* if you have it).
+Rebuilds a picture out of editor objects, so it can sit behind your level.
 
-- 100 challenges in 4 rarities (Common / Rare / Epic / Legendary)
-- Double spin, rerolls, win streak bonus, daily challenge, jackpots
-- Collection book and stats
-- Photosensitive safe mode is ON by default
+1. Open the editor and press **IMG Folder**. Put a `.png` or `.jpg` picture into the folder that opens.
+2. Press **IMG to BG**. The newest picture in that folder is rebuilt from coloured squares in the middle of your view.
+3. The squares are selected, so you can move or scale the whole picture right away. Undo removes it.
 
-Practice mode and start positions never count. Platformer levels are not supported.
+The squares use the built-in white colour channel with a per-object HSV tint, so no colour channels are used up. They are on the lowest Z layer and marked NoTouch, so the player passes through them.
+
+Settings (**IMG Settings**): width in cells, cell size, colour detail, group ID, editor layer.

@@ -1,22 +1,58 @@
 {
-  "geode": "5.9.0",
-  "gd": { "win": "2.2081" },
-  "id": "matjang.roulette",
-  "name": "Roulette Challenge",
-  "version": "v1.0.0",
-  "developer": "matjang",
-  "description": "Spin a roulette before a level and play it with one of 100 random handicaps. Clear the goal to win points.",
-  "tags": ["gameplay", "interface"],
-  "settings": {
-    "safe-mode": { "type": "bool", "default": true, "name": "Photosensitive safe mode", "description": "Never roll challenges with fast flashing or fast spinning." },
-    "spicy": { "type": "bool", "default": false, "name": "Spicy odds", "description": "Epic and Legendary challenges show up much more often." },
-    "hud": { "type": "bool", "default": true, "name": "Challenge HUD", "description": "Show the active challenge and goal while playing." },
-    "chaos-seconds": { "type": "int", "default": 0, "min": 0, "max": 60, "name": "Chaos mode (seconds)", "description": "If above 0, the handicap changes to a new random one every this many seconds.", "control": { "slider": true } },
-    "cat-world": { "type": "bool", "default": true, "name": "Category: Camera", "description": "Flips, tilts, zooms, shakes." },
-    "cat-overlay": { "type": "bool", "default": true, "name": "Category: Screen covers", "description": "Darkness, bars, tints." },
-    "cat-player": { "type": "bool", "default": true, "name": "Category: Icon", "description": "Invisible, giant, tiny icon." },
-    "cat-speed": { "type": "bool", "default": true, "name": "Category: Game speed", "description": "Slow motion, turbo, lag." },
-    "cat-text": { "type": "bool", "default": true, "name": "Category: Distractions", "description": "Flying text and fake messages." },
-    "cat-rules": { "type": "bool", "default": true, "name": "Category: Rules", "description": "Limited tries and harder goals." }
-  }
+	"geode": "5.11.2",
+	"gd": {
+		"win": "2.2081"
+	},
+	"id": "yujun566.imagebg",
+	"name": "Image Background",
+	"version": "v1.0.0",
+	"developer": "yujun566",
+	"description": "Turns a picture into editor objects (coloured squares), so it can be used as a level background.",
+	"tags": [
+		"editor",
+		"utility",
+		"offline"
+	],
+	"settings": {
+		"width": {
+			"name": "Width (cells)",
+			"description": "How many squares wide the picture is. More = sharper, but more objects.",
+			"type": "int",
+			"default": 80,
+			"min": 16,
+			"max": 240
+		},
+		"cell": {
+			"name": "Cell size",
+			"description": "Size of one square in units (a block is 30). Picture width = width x cell size.",
+			"type": "float",
+			"default": 7.5,
+			"min": 1.0,
+			"max": 30.0
+		},
+		"colors": {
+			"name": "Colour detail (1-5)",
+			"description": "Lower = fewer different colours, so more squares merge into long bars and the object count drops.",
+			"type": "int",
+			"default": 3,
+			"min": 1,
+			"max": 5
+		},
+		"group": {
+			"name": "Group ID",
+			"description": "Every square gets this group (0 = none), so one Move trigger can move the whole picture.",
+			"type": "int",
+			"default": 0,
+			"min": 0,
+			"max": 9999
+		},
+		"editor-layer": {
+			"name": "Editor layer",
+			"description": "Editor layer the squares are put on, so the picture can be hidden or locked.",
+			"type": "int",
+			"default": 50,
+			"min": 0,
+			"max": 999
+		}
+	}
 }

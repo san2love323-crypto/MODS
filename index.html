@@ -5,7 +5,7 @@
   <meta name="google-site-verification" content="-JD1G3OVqw3sHXn5g4JncDQmDxF3xz8ttfvq4bpfAm8" />
   <meta name="google-site-verification" content="h4lUOCK9uzaSBCtHsjBi_AFfCF8rLfZZa6301712WQ0" />
   <meta charset="UTF-8">
-  <link rel="canonical" href="https://manmulsang.kro.kr/" />
+  <link rel="canonical" href="https://xn--lz2bi0ae5j.xn--oi2b61z32a.xn--3e0b707e/" />
   <title>만물상 RPG - 웹 온라인 게임</title>
   <meta name="description" content="웹에서 바로 즐기는 만물상 RPG 게임입니다.">
   <meta name="keywords" content="만물상RPG, 웹게임, RPG, 온라인게임">
@@ -14,7 +14,7 @@
   <meta property="og:type" content="website">
   <meta property="og:title" content="만물상 RPG">
   <meta property="og:description" content="웹에서 바로 즐기는 만물상 RPG 게임">
-  <meta property="og:url" content="http://manmulsang-rpg.kro.kr">
+  <meta property="og:url" content="https://xn--lz2bi0ae5j.xn--oi2b61z32a.xn--3e0b707e">
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <link rel="manifest" href="manifest.json">
@@ -494,7 +494,7 @@ input, textarea, [contenteditable], [style*="user-select:all"], [style*="user-se
        4) 프로젝트 설정(⚙️) → 내 앱 → 웹 앱(</>) 추가 → firebaseConfig 복사
        5) 아래 값들을 그대로 붙여넣기
        6) 프로젝트 설정 > Authentication > Settings > 승인된 도메인 에
-          이 게임을 올리는 주소(예: manmulsang-rpg.kro.kr, localhost)를 추가
+          이 게임을 올리는 주소(예: xn--lz2bi0ae5j.xn--oi2b61z32a.xn--3e0b707e, localhost)를 추가
      ▶ 설정 전까지는 자동으로 로컬 저장만 사용됩니다(게임은 정상 작동).
      ═══════════════════════════════════════════════════════════════ -->
 <script type="module">
@@ -2900,7 +2900,7 @@ const NET = (() => {
   let base = null, online = false, lastErr = 0;
 
   // 📱 앱(APK) / file:// 로 열렸을 때 접속할 공개 서버 주소 (온라인 기능용)
-  const APP_SERVER_URL = 'http://manmulsang-rpg.kro.kr';
+  const APP_SERVER_URL = 'https://xn--lz2bi0ae5j.xn--oi2b61z32a.xn--3e0b707e';
 
   function candidates(){
     const saved = (typeof storage!=='undefined' && storage.getItem('rift-server-url')) || '';
@@ -4721,8 +4721,10 @@ let currentDifficulty = 'normal';
 //   126~150 🌠 초월 차원  (Transcendent)
 //   151~175 ✨ 신의 차원  (Divine)
 //   176~200 👑 DEV 차원   (Developer)
+//   201~3000   차원 1개 = 25스테이지 (혼돈 ~ 만물상)
+//   3001~10000 차원 1개 = 100스테이지 (흥정 ~ 만물의 주인)
 // ============================================================================
-const MAX_STAGE = 3000;   // +1000 스테이지 확장 (균열 너머: 재탄생 ~ 만물상)
+const MAX_STAGE = 10000;  // +7000 스테이지 확장 (만물상 그 너머: 흥정 ~ 만물의 주인)
 
 const TIERS = [
   {id:'normal', name:'일반',  icon:'',   start:1,   end:100, hpMul:1,      atkMul:1,     goldMul:1,    color:'#43e6cf', pfx:''},
@@ -4843,6 +4845,85 @@ const TIERS = [
   {id:'t110', name:'근원', icon:'💠', start:2926, end:2950, hpMul:6.761e+245, atkMul:5.396e+197, goldMul:6.95e+188, color:'#a86bff', pfx:'근원의'},
   {id:'t111', name:'시원', icon:'🌠', start:2951, end:2975, hpMul:3.516e+247, atkMul:1.068e+199, goldMul:1.119e+190, color:'#e06be0', pfx:'시원의'},
   {id:'t112', name:'만물상', icon:'🛍️', start:2976, end:3000, hpMul:1.828e+249, atkMul:2.115e+200, goldMul:1.801e+191, color:'#ffffff', pfx:'만물을 거느린'},
+  // ═══ 만물상 그 너머 (3001~10000, +7000 스테이지 확장 · 차원 1개 = 100스테이지) ═══
+  //   lhp/latk/lgold = 이 차원 안에서 스테이지 1칸마다 곱해지는 성장률 (없으면 기존 1.22/1.18/1.17)
+  // ── 거래의 차원 (3001~4000) ──
+  {id:'t113', name:'흥정', icon:'🤝', start:3001, end:3100, hpMul:2.181e+251, atkMul:1.131e+202, goldMul:7.85e+192, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff2d95', pfx:'흥정하는'},
+  {id:'t114', name:'저울', icon:'⚖️', start:3101, end:3200, hpMul:5.615e+251, atkMul:2.311e+202, goldMul:1.526e+193, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff5470', pfx:'저울 위의'},
+  {id:'t115', name:'장부', icon:'📒', start:3201, end:3300, hpMul:1.445e+252, atkMul:4.722e+202, goldMul:2.967e+193, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff8a3a', pfx:'장부에 적힌'},
+  {id:'t116', name:'금고', icon:'🔐', start:3301, end:3400, hpMul:3.721e+252, atkMul:9.648e+202, goldMul:5.768e+193, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ffd23f', pfx:'금고를 지키는'},
+  {id:'t117', name:'계약', icon:'📜', start:3401, end:3500, hpMul:9.577e+252, atkMul:1.971e+203, goldMul:1.121e+194, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#a8e86a', pfx:'계약에 묶인'},
+  {id:'t118', name:'담보', icon:'💰', start:3501, end:3600, hpMul:2.465e+253, atkMul:4.027e+203, goldMul:2.18e+194, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#43e6cf', pfx:'담보로 잡힌'},
+  {id:'t119', name:'이자', icon:'💹', start:3601, end:3700, hpMul:6.346e+253, atkMul:8.227e+203, goldMul:4.238e+194, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#43a0e6', pfx:'이자가 붙은'},
+  {id:'t120', name:'독점', icon:'🎩', start:3701, end:3800, hpMul:1.634e+254, atkMul:1.681e+204, goldMul:8.239e+194, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#a86bff', pfx:'독점하는'},
+  {id:'t121', name:'파산', icon:'📉', start:3801, end:3900, hpMul:4.205e+254, atkMul:3.434e+204, goldMul:1.602e+195, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#e06be0', pfx:'파산한'},
+  {id:'t122', name:'거상', icon:'👑', start:3901, end:4000, hpMul:1.082e+255, atkMul:7.016e+204, goldMul:3.114e+195, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ffffff', pfx:'거상의'},
+  // ── 교역로의 차원 (4001~5000) ──
+  {id:'t123', name:'나루터', icon:'⛵', start:4001, end:4100, hpMul:2.786e+255, atkMul:1.433e+205, goldMul:6.053e+195, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff2d95', pfx:'나루터의'},
+  {id:'t124', name:'사막길', icon:'🐪', start:4101, end:4200, hpMul:7.173e+255, atkMul:2.928e+205, goldMul:1.177e+196, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff5470', pfx:'사막길의'},
+  {id:'t125', name:'비단길', icon:'🧵', start:4201, end:4300, hpMul:1.846e+256, atkMul:5.983e+205, goldMul:2.288e+196, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff8a3a', pfx:'비단길의'},
+  {id:'t126', name:'향신료', icon:'🌶️', start:4301, end:4400, hpMul:4.753e+256, atkMul:1.222e+206, goldMul:4.448e+196, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ffd23f', pfx:'향신료에 절인'},
+  {id:'t127', name:'밀수', icon:'🕶️', start:4401, end:4500, hpMul:1.223e+257, atkMul:2.497e+206, goldMul:8.646e+196, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#a8e86a', pfx:'밀수된'},
+  {id:'t128', name:'암시장', icon:'🕯️', start:4501, end:4600, hpMul:3.149e+257, atkMul:5.102e+206, goldMul:1.681e+197, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#43e6cf', pfx:'암시장의'},
+  {id:'t129', name:'경매장', icon:'🔨', start:4601, end:4700, hpMul:8.107e+257, atkMul:1.042e+207, goldMul:3.268e+197, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#43a0e6', pfx:'경매에 나온'},
+  {id:'t130', name:'보물선', icon:'🚢', start:4701, end:4800, hpMul:2.087e+258, atkMul:2.13e+207, goldMul:6.353e+197, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#a86bff', pfx:'보물선의'},
+  {id:'t131', name:'신기루', icon:'🏜️', start:4801, end:4900, hpMul:5.372e+258, atkMul:4.351e+207, goldMul:1.235e+198, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#e06be0', pfx:'신기루 속의'},
+  {id:'t132', name:'황금항', icon:'⚓', start:4901, end:5000, hpMul:1.383e+259, atkMul:8.889e+207, goldMul:2.401e+198, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ffffff', pfx:'황금항의'},
+  // ── 장인의 차원 (5001~6000) ──
+  {id:'t133', name:'풀무', icon:'🔥', start:5001, end:5100, hpMul:3.559e+259, atkMul:1.816e+208, goldMul:4.668e+198, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff2d95', pfx:'풀무질한'},
+  {id:'t134', name:'모루', icon:'⚒️', start:5101, end:5200, hpMul:9.162e+259, atkMul:3.71e+208, goldMul:9.075e+198, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff5470', pfx:'모루 위의'},
+  {id:'t135', name:'담금질', icon:'💧', start:5201, end:5300, hpMul:2.358e+260, atkMul:7.581e+208, goldMul:1.764e+199, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff8a3a', pfx:'담금질한'},
+  {id:'t136', name:'세공', icon:'💎', start:5301, end:5400, hpMul:6.071e+260, atkMul:1.549e+209, goldMul:3.43e+199, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ffd23f', pfx:'세공된'},
+  {id:'t137', name:'각인', icon:'✒️', start:5401, end:5500, hpMul:1.563e+261, atkMul:3.164e+209, goldMul:6.668e+199, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#a8e86a', pfx:'각인된'},
+  {id:'t138', name:'연금', icon:'⚗️', start:5501, end:5600, hpMul:4.023e+261, atkMul:6.464e+209, goldMul:1.296e+200, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#43e6cf', pfx:'연금된'},
+  {id:'t139', name:'주조', icon:'🏺', start:5601, end:5700, hpMul:1.036e+262, atkMul:1.321e+210, goldMul:2.52e+200, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#43a0e6', pfx:'주조된'},
+  {id:'t140', name:'명장', icon:'🎖️', start:5701, end:5800, hpMul:2.666e+262, atkMul:2.698e+210, goldMul:4.899e+200, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#a86bff', pfx:'명장이 빚은'},
+  {id:'t141', name:'걸작', icon:'🖼️', start:5801, end:5900, hpMul:6.862e+262, atkMul:5.513e+210, goldMul:9.524e+200, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#e06be0', pfx:'걸작이 된'},
+  {id:'t142', name:'신기', icon:'🗡️', start:5901, end:6000, hpMul:1.766e+263, atkMul:1.126e+211, goldMul:1.852e+201, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ffffff', pfx:'신기를 든'},
+  // ── 시간의 차원 (6001~7000) ──
+  {id:'t143', name:'새벽', icon:'🌄', start:6001, end:6100, hpMul:4.547e+263, atkMul:2.301e+211, goldMul:3.599e+201, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff2d95', pfx:'새벽의'},
+  {id:'t144', name:'어제', icon:'⏪', start:6101, end:6200, hpMul:1.17e+264, atkMul:4.701e+211, goldMul:6.998e+201, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff5470', pfx:'어제의'},
+  {id:'t145', name:'내일', icon:'⏩', start:6201, end:6300, hpMul:3.013e+264, atkMul:9.605e+211, goldMul:1.36e+202, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff8a3a', pfx:'내일의'},
+  {id:'t146', name:'망각', icon:'🌫️', start:6301, end:6400, hpMul:7.755e+264, atkMul:1.962e+212, goldMul:2.645e+202, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ffd23f', pfx:'망각된'},
+  {id:'t147', name:'기억', icon:'🧠', start:6401, end:6500, hpMul:1.996e+265, atkMul:4.009e+212, goldMul:5.142e+202, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#a8e86a', pfx:'기억 속의'},
+  {id:'t148', name:'예언', icon:'🔮', start:6501, end:6600, hpMul:5.139e+265, atkMul:8.191e+212, goldMul:9.995e+202, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#43e6cf', pfx:'예언된'},
+  {id:'t149', name:'회귀', icon:'🔄', start:6601, end:6700, hpMul:1.323e+266, atkMul:1.673e+213, goldMul:1.943e+203, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#43a0e6', pfx:'회귀한'},
+  {id:'t150', name:'정지', icon:'⏸️', start:6701, end:6800, hpMul:3.405e+266, atkMul:3.419e+213, goldMul:3.778e+203, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#a86bff', pfx:'멈춰버린'},
+  {id:'t151', name:'역행', icon:'↩️', start:6801, end:6900, hpMul:8.765e+266, atkMul:6.985e+213, goldMul:7.344e+203, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#e06be0', pfx:'역행하는'},
+  {id:'t152', name:'종막', icon:'🎭', start:6901, end:7000, hpMul:2.256e+267, atkMul:1.427e+214, goldMul:1.428e+204, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ffffff', pfx:'종막의'},
+  // ── 꿈의 차원 (7001~8000) ──
+  {id:'t153', name:'선잠', icon:'😴', start:7001, end:7100, hpMul:5.808e+267, atkMul:2.915e+214, goldMul:2.776e+204, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff2d95', pfx:'선잠에 든'},
+  {id:'t154', name:'백일몽', icon:'☁️', start:7101, end:7200, hpMul:1.495e+268, atkMul:5.956e+214, goldMul:5.396e+204, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff5470', pfx:'백일몽의'},
+  {id:'t155', name:'환상', icon:'🦄', start:7201, end:7300, hpMul:3.848e+268, atkMul:1.217e+215, goldMul:1.049e+205, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff8a3a', pfx:'환상의'},
+  {id:'t156', name:'몽마', icon:'👹', start:7301, end:7400, hpMul:9.906e+268, atkMul:2.486e+215, goldMul:2.039e+205, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ffd23f', pfx:'몽마의'},
+  {id:'t157', name:'몽환', icon:'🌈', start:7401, end:7500, hpMul:2.55e+269, atkMul:5.079e+215, goldMul:3.965e+205, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#a8e86a', pfx:'몽환의'},
+  {id:'t158', name:'심상', icon:'🖌️', start:7501, end:7600, hpMul:6.564e+269, atkMul:1.038e+216, goldMul:7.708e+205, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#43e6cf', pfx:'심상의'},
+  {id:'t159', name:'무의식', icon:'🌊', start:7601, end:7700, hpMul:1.69e+270, atkMul:2.12e+216, goldMul:1.498e+206, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#43a0e6', pfx:'무의식의'},
+  {id:'t160', name:'자각몽', icon:'👁️', start:7701, end:7800, hpMul:4.349e+270, atkMul:4.332e+216, goldMul:2.913e+206, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#a86bff', pfx:'자각몽의'},
+  {id:'t161', name:'호접몽', icon:'🦋', start:7801, end:7900, hpMul:1.12e+271, atkMul:8.85e+216, goldMul:5.663e+206, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#e06be0', pfx:'호접몽의'},
+  {id:'t162', name:'깨어남', icon:'☀️', start:7901, end:8000, hpMul:2.882e+271, atkMul:1.808e+217, goldMul:1.101e+207, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ffffff', pfx:'깨어난'},
+  // ── 신화의 차원 (8001~9000) ──
+  {id:'t163', name:'전설', icon:'📖', start:8001, end:8100, hpMul:7.419e+271, atkMul:3.694e+217, goldMul:2.14e+207, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff2d95', pfx:'전설 속의'},
+  {id:'t164', name:'신탁', icon:'🏛️', start:8101, end:8200, hpMul:1.91e+272, atkMul:7.547e+217, goldMul:4.161e+207, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff5470', pfx:'신탁을 받은'},
+  {id:'t165', name:'거인', icon:'🗿', start:8201, end:8300, hpMul:4.916e+272, atkMul:1.542e+218, goldMul:8.089e+207, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff8a3a', pfx:'거인의'},
+  {id:'t166', name:'용맥', icon:'🐉', start:8301, end:8400, hpMul:1.265e+273, atkMul:3.15e+218, goldMul:1.573e+208, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ffd23f', pfx:'용맥의'},
+  {id:'t167', name:'세계수', icon:'🌳', start:8401, end:8500, hpMul:3.257e+273, atkMul:6.436e+218, goldMul:3.057e+208, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#a8e86a', pfx:'세계수의'},
+  {id:'t168', name:'낙원', icon:'🏝️', start:8501, end:8600, hpMul:8.385e+273, atkMul:1.315e+219, goldMul:5.944e+208, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#43e6cf', pfx:'낙원의'},
+  {id:'t169', name:'나락', icon:'🕳️', start:8601, end:8700, hpMul:2.158e+274, atkMul:2.686e+219, goldMul:1.155e+209, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#43a0e6', pfx:'나락의'},
+  {id:'t170', name:'신들의 전장', icon:'⚔️', start:8701, end:8800, hpMul:5.556e+274, atkMul:5.488e+219, goldMul:2.246e+209, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#a86bff', pfx:'전장을 누비는'},
+  {id:'t171', name:'옥좌', icon:'🏯', start:8801, end:8900, hpMul:1.43e+275, atkMul:1.121e+220, goldMul:4.367e+209, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#e06be0', pfx:'옥좌의'},
+  {id:'t172', name:'신화', icon:'🌟', start:8901, end:9000, hpMul:3.682e+275, atkMul:2.291e+220, goldMul:8.49e+209, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ffffff', pfx:'신화가 된'},
+  // ── 균열 저편 (9001~10000) ──
+  {id:'t173', name:'공백', icon:'⬜', start:9001, end:9100, hpMul:9.477e+275, atkMul:4.68e+220, goldMul:1.651e+210, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff2d95', pfx:'공백의'},
+  {id:'t174', name:'메아리', icon:'📣', start:9101, end:9200, hpMul:2.439e+276, atkMul:9.562e+220, goldMul:3.209e+210, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff5470', pfx:'메아리치는'},
+  {id:'t175', name:'그림자', icon:'👤', start:9201, end:9300, hpMul:6.279e+276, atkMul:1.954e+221, goldMul:6.238e+210, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ff8a3a', pfx:'그림자 진'},
+  {id:'t176', name:'미궁', icon:'🧩', start:9301, end:9400, hpMul:1.616e+277, atkMul:3.991e+221, goldMul:1.213e+211, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ffd23f', pfx:'미궁에 갇힌'},
+  {id:'t177', name:'문턱', icon:'🚪', start:9401, end:9500, hpMul:4.161e+277, atkMul:8.154e+221, goldMul:2.358e+211, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#a8e86a', pfx:'문턱에 선'},
+  {id:'t178', name:'저편', icon:'🌉', start:9501, end:9600, hpMul:1.071e+278, atkMul:1.666e+222, goldMul:4.583e+211, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#43e6cf', pfx:'저편의'},
+  {id:'t179', name:'유일', icon:'☝️', start:9601, end:9700, hpMul:2.757e+278, atkMul:3.404e+222, goldMul:8.91e+211, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#43a0e6', pfx:'유일한'},
+  {id:'t180', name:'전부', icon:'🌐', start:9701, end:9800, hpMul:7.097e+278, atkMul:6.954e+222, goldMul:1.732e+212, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#a86bff', pfx:'전부를 가진'},
+  {id:'t181', name:'균열의 주인', icon:'🌌', start:9801, end:9900, hpMul:1.827e+279, atkMul:1.421e+223, goldMul:3.368e+212, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#e06be0', pfx:'균열을 다스리는'},
+  {id:'t182', name:'만물의 주인', icon:'🏆', start:9901, end:10000, hpMul:4.703e+279, atkMul:2.902e+223, goldMul:6.547e+212, lhp:1.0095, latk:1.00717, lgold:1.00667, color:'#ffffff', pfx:'만물을 초월한'},
 ];
 
 function tierOf(stage){
@@ -4860,12 +4941,13 @@ function isSpecialTier(stage){ return stage > 100; }
 function tierLocalMul(stage, per){
   const t = tierOf(stage);
   if(t.id === 'normal') return 1;
-  const local = stage - t.start;      // 0 ~ 24
+  const local = stage - t.start;      // 0 ~ 24 (3001 이후 차원은 0 ~ 99)
   return Math.pow(per, local);
 }
-function tierHpMul(stage){ return tierOf(stage).hpMul * tierLocalMul(stage, 1.22); }
-function tierAtkMul(stage){ return tierOf(stage).atkMul * tierLocalMul(stage, 1.18); }
-function tierGoldMul(stage){ return tierOf(stage).goldMul * tierLocalMul(stage, 1.17); }
+// (3001 이후 차원은 lhp/latk/lgold 로 자체 성장률을 가진다 — 숫자가 무한대로 넘치지 않게 완만하게)
+function tierHpMul(stage){ const t = tierOf(stage); return t.hpMul * tierLocalMul(stage, t.lhp || 1.22); }
+function tierAtkMul(stage){ const t = tierOf(stage); return t.atkMul * tierLocalMul(stage, t.latk || 1.18); }
+function tierGoldMul(stage){ const t = tierOf(stage); return t.goldMul * tierLocalMul(stage, t.lgold || 1.17); }
 
 // 상위 티어 스테이지 표시: "⚡강화 3-2" 형태
 // (몬스터/보스 테이블이 '10스테이지 = 1지역, 10번째가 보스' 구조이므로
@@ -5915,7 +5997,8 @@ function worldIdx(stage){ const s = stage > 100 ? ((stage-101)%100)+1 : stage; r
 function stageLabel(stage){ return tierStageLabel(stage); }
 
 /* ---------- 숫자 표기 (K/M/B…) ---------- */
-const UNITS = ['','K','M','B','T','Qa','Qi','Sx','Sp','Oc','No','Dc','UDc','DDc','TDc','QaDc','QiDc','SxDc','SpDc','OcDc','NoDc','Vg','UVg','DVg','TVg','QaVg','QiVg','SxVg','SpVg','OcVg','NoVg','Tg','UTg','DTg','TTg','QaTg','QiTg','SxTg','SpTg','OcTg','NoTg','Qd','UQd','DQd','TQd','QaQd','QiQd','SxQd','SpQd','OcQd','NoQd','Qq','UQq','DQq','TQq','QaQq','QiQq','SxQq','SpQq','OcQq','NoQq'];
+const UNITS = ['','K','M','B','T','Qa','Qi','Sx','Sp','Oc','No','Dc','UDc','DDc','TDc','QaDc','QiDc','SxDc','SpDc','OcDc','NoDc','Vg','UVg','DVg','TVg','QaVg','QiVg','SxVg','SpVg','OcVg','NoVg','Tg','UTg','DTg','TTg','QaTg','QiTg','SxTg','SpTg','OcTg','NoTg','Qd','UQd','DQd','TQd','QaQd','QiQd','SxQd','SpQd','OcQd','NoQd','Qq','UQq','DQq','TQq','QaQq','QiQq','SxQq','SpQq','OcQq','NoQq',
+  'Sg','USg','DSg','TSg','QaSg','QiSg','SxSg','SpSg','OcSg','NoSg','St','USt','DSt','TSt','QaSt','QiSt','SxSt','SpSt','OcSt','NoSt','Og','UOg','DOg','TOg','QaOg','QiOg','SxOg','SpOg','OcOg','NoOg','Ng','UNg','DNg','TNg','QaNg','QiNg','SxNg','SpNg','OcNg','NoNg','Ce','UCe'];
 
 // 무한(∞) HP에서도 안전한 퍼센트 계산 (Infinity/Infinity = NaN 방지)
 function safePct(cur, max){
@@ -6741,6 +6824,7 @@ function hitMob(dmg, crit, byPet){
         return;
       }
       S.stage++; S.kills = 0; S.reviveUsed = false;
+      if(S.allClear && S.stage < MAX_STAGE) S.allClear = false;   // 최대 스테이지가 늘어났으면 정복 연출 다시
       // ⏩ 스테이지 스킵 (상위 티어에서는 스킵 없음 — 난이도 유지)
       let skip = 0;
       if(!isSpecialTier(S.stage)){

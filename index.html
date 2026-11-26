@@ -26,6 +26,148 @@
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="preload" as="font" type="font/woff2" href="https://cdn.jsdelivr.net/npm/galmuri@2.40.3/dist/Galmuri11.woff2" crossorigin>
   <link href="https://cdn.jsdelivr.net/npm/galmuri@2.40.3/dist/galmuri.css" rel="stylesheet">
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   🛡️ v2 가드 (다른 어떤 코드보다 먼저 실행)
+   1) 밝은/어두운 화면 모드를 첫 화면이 그려지기 전에 적용
+   2) 시간 조작 방지 — 서버 시각 기준 시계 + 날짜는 앞으로만
+   3) 한 번에 한 탭만 플레이 (여러 탭을 띄워 세이브를 되돌리는 꼼수 방지)
+   ═══════════════════════════════════════════════════════════════ */
+(function(){
+  'use strict';
+  var LS = {
+    get:function(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } },
+    set:function(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
+  };
+
+  /* ---------- 1) 화면 모드 ---------- */
+  try{ if(LS.get('rift-ui-mode')==='light') document.documentElement.classList.add('light'); }catch(e){}
+
+  /* ---------- 2) 믿을 수 있는 시계 ----------
+     - 평소(native): PC 시계 그대로.
+     - 서버와 2분 넘게 차이(offset): 서버 시각을 따른다 → PC 시계를 앞으로 돌려도 소용없음.
+     - 서버 확인이 안 될 때(chain): 시계를 과거로 돌렸거나, 마지막 서버 확인 뒤 36시간 넘게
+       건너뛴 경우엔 "마지막으로 본 시각 + 실제로 켜져 있던 시간"만큼만 흐르게 한다. */
+  var RealDate = Date;
+  var realNow = function(){ return RealDate.now(); };
+  var H = 3600000;
+  var mode = 'native', offset = 0, chainBase = 0, chainPerf = 0, synced = false;
+  var tmax  = parseInt(LS.get('rift-tmax')  || '0', 10) || 0;   // 지금까지 본 가장 늦은 시각
+  var tsync = parseInt(LS.get('rift-tsync') || '0', 10) || 0;   // 마지막으로 서버와 맞춘 시각
+
+  function startChain(base){ mode = 'chain'; chainBase = base; chainPerf = performance.now(); }
+  function trustedNow(){
+    if(mode === 'offset') return realNow() + offset;
+    if(mode === 'chain')  return Math.floor(chainBase + (performance.now() - chainPerf));
+    return realNow();
+  }
+  (function initial(){
+    var t = realNow();
+    if(tmax && t < tmax - 10*60000){ startChain(tmax); return; }
+    if(tsync && t > tsync + 36*H){ startChain(Math.max(tsync + 36*H, tmax || 0)); return; }
+  })();
+
+  function sync(serverMs, t0, t1){
+    // t0/t1 = 요청을 보낸/받은 순간의 performance.now()
+    var localAtMid = realNow() - (performance.now() - (t0 + t1) / 2);
+    var skew = serverMs - localAtMid;
+    synced = true;
+    if(Math.abs(skew) > 120000){ mode = 'offset'; offset = skew; }
+    else { mode = 'native'; offset = 0; }
+    tsync = trustedNow(); tmax = tsync;
+    LS.set('rift-tsync', String(tsync)); LS.set('rift-tmax', String(tmax));
+  }
+  setInterval(function(){
+    var n = trustedNow();
+    if(n > tmax){ tmax = n; LS.set('rift-tmax', String(n)); }
+  }, 20000);
+
+  // Date 를 감싸서 게임 안의 모든 시간 계산이 위 시계를 쓰게 한다 (평소엔 원래 Date 와 완전히 동일)
+  function TDate(a,b,c,d,e,f,g){
+    if(!(this instanceof TDate)) return new RealDate(trustedNow()).toString();
+    switch(arguments.length){
+      case 0: return new RealDate(trustedNow());
+      case 1: return new RealDate(a);
+      case 2: return new RealDate(a,b);
+      case 3: return new RealDate(a,b,c);
+      case 4: return new RealDate(a,b,c,d);
+      case 5: return new RealDate(a,b,c,d,e);
+      case 6: return new RealDate(a,b,c,d,e,f);
+      default: return new RealDate(a,b,c,d,e,f,g);
+    }
+  }
+  TDate.prototype = RealDate.prototype;
+  TDate.now = trustedNow; TDate.parse = RealDate.parse; TDate.UTC = RealDate.UTC;
+  try{ Object.defineProperty(TDate, 'name', {value:'Date'}); }catch(e){}
+  try{ window.Date = TDate; }catch(e){}
+
+  // 날짜(일일 보상·출석 기준): 앞으로만 간다. 시계나 시간대를 되돌려도 "새 날"이 되지 않는다.
+  var dmax = parseInt(LS.get('rift-dmax') || '0', 10) || 0;
+  function dayIndex(ms){ return Math.floor((ms - new RealDate(ms).getTimezoneOffset()*60000) / 86400000); }
+  function gameDay(){
+    var di = dayIndex(trustedNow());
+    if(di > dmax){ dmax = di; LS.set('rift-dmax', String(di)); }
+    return dmax;
+  }
+  function dayStr(idx){
+    var u = new RealDate(idx*86400000 + 12*H);
+    return new RealDate(u.getUTCFullYear(), u.getUTCMonth(), u.getUTCDate(), 12).toDateString();
+  }
+  window.riftToday     = function(){ return dayStr(gameDay()); };
+  window.riftYesterday = function(){ return dayStr(gameDay() - 1); };
+
+  /* ---------- 3) 한 탭만 ---------- */
+  var tabId = Math.random().toString(36).slice(2) + realNow().toString(36);
+  var tab = { inactive:false };
+  window.__riftTab = tab;
+  function showInactive(){
+    var put = function(){
+      if(document.getElementById('riftTabLock')) return;
+      var el = document.createElement('div');
+      el.id = 'riftTabLock';
+      el.style.cssText = 'position:fixed;inset:0;z-index:2147483000;background:rgba(8,5,20,.94);color:#eae6ff;' +
+        'display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;' +
+        'padding:24px;font-family:inherit;gap:14px;';
+      el.innerHTML = '<div style="font-size:44px">🪟</div>' +
+        '<div style="font-size:18px;color:#ffd23f">다른 탭에서 게임이 열렸습니다</div>' +
+        '<div style="font-size:13px;line-height:1.8;color:#b9b2e6;max-width:380px">세이브가 꼬이지 않도록 이 탭은 멈췄습니다.<br>진행 상황은 저장된 상태예요.</div>' +
+        '<button id="riftTabHere" style="font-family:inherit;font-size:15px;padding:12px 22px;cursor:pointer;' +
+        'background:#ffd23f;color:#12081f;border:3px solid #000;font-weight:bold">▶ 이 탭에서 계속하기</button>';
+      document.body.appendChild(el);
+      document.getElementById('riftTabHere').onclick = function(){ location.reload(); };
+    };
+    if(document.body) put(); else document.addEventListener('DOMContentLoaded', put);
+  }
+  try{
+    var bc = new BroadcastChannel('rift-shop-tab');
+    bc.onmessage = function(ev){
+      var m = ev.data || {};
+      if(m.t === 'hello' && m.id !== tabId && !tab.inactive){
+        try{ if(typeof saveGame === 'function' && typeof S !== 'undefined' && S) saveGame(true); }catch(e){}
+        tab.inactive = true;
+        showInactive();
+      }
+    };
+    bc.postMessage({t:'hello', id:tabId});
+  }catch(e){}
+
+  /* ---------- 시동 대기: 서버 시각 확인(최대 1.5초) + 이전 탭이 저장할 틈(0.15초) ---------- */
+  var settle, settled = false;
+  var timeReady = new Promise(function(r){ settle = function(){ if(!settled){ settled = true; r(); } }; });
+  setTimeout(settle, 1500);
+  var gap = new Promise(function(r){ setTimeout(r, 150); });
+  window.__riftBootReady = Promise.all([timeReady, gap]);
+
+  window.__riftTime = {
+    sync: function(serverMs, t0, t1){ try{ sync(serverMs, t0, t1); }catch(e){} settle(); },
+    settle: function(){ settle(); },
+    now: trustedNow,
+    real: realNow,
+    mode: function(){ return mode; },
+    synced: function(){ return synced; }
+  };
+})();
+</script>
 <style>
 /* 🔤 도트 폰트 (갈무리) — CDN css가 실패해도 뜨도록 직접 선언 (이중 안전장치) */
 @font-face{font-family:'Galmuri11';font-weight:400;font-display:swap;
@@ -659,6 +801,147 @@ input, textarea, [contenteditable], [style*="user-select:all"], [style*="user-se
   }
 </script>
 
+<style id="v2css">
+/* ═══════════════════ 확장팩 9탄 (v2) 화면 요소 ═══════════════════ */
+/* 강화 수량 */
+#upAmtRow .upAmtBox{display:flex; gap:4px; align-items:center; flex-wrap:wrap; justify-content:flex-end;}
+#upAmtRow .upAmtBox button{padding:5px 8px; font-size:12px; min-width:34px;}
+#upAmtRow .upAmtBox button.on{border-color:var(--gold); color:var(--gold); box-shadow:0 3px 0 #0a0818, inset 0 -3px 0 var(--gold);}
+#upAmt{width:86px; background:var(--panel2); border:2px solid var(--line); color:var(--gold); text-align:center; font-family:inherit; font-size:13px; padding:5px;}
+#upAmt::placeholder{color:var(--mut); font-size:11px;}
+
+/* 보스 패턴 표시줄 */
+#bossPatBar{display:none; margin-top:4px; padding:5px 8px; font-size:11px; line-height:1.5; border:1px dashed var(--line); color:var(--mut); background:var(--panel2);}
+#bossPatBar.hot{border-style:solid; border-color:var(--gold); color:var(--gold); animation:v2Pulse .7s ease-in-out infinite;}
+@keyframes v2Pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,210,63,.0);}50%{box-shadow:0 0 10px 1px rgba(255,210,63,.45);}}
+
+/* 상단 버튼 */
+#finderBtn, #modeBtn{font-size:11px; padding:6px 9px;}
+#finderBtn{border-color:var(--cyan); color:var(--cyan);}
+
+/* 묶음 버튼(둘 중 하나 고르기) */
+.v2Seg{display:flex; gap:0;}
+.v2Seg button{margin:0; border-right-width:0;}
+.v2Seg button:last-child{border-right-width:2px;}
+.v2Seg button.on, #v2SetBox .row > button.on{border-color:var(--green); color:var(--green);}
+.v2Seg button.on + button{border-left-color:var(--green);}
+
+/* 제작소 */
+.v2CraftCtl{display:flex; gap:6px; flex-wrap:wrap; align-items:center;}
+.v2CraftCtl select, .v2CraftCtl input{background:var(--panel2); border:2px solid var(--line); color:var(--txt); font-family:inherit; font-size:12px; padding:6px;}
+.v2CraftCtl input{flex:1; min-width:140px;}
+#v2CraftList{max-height:340px; overflow-y:auto; border:1px dashed var(--line); padding:4px 6px;}
+#v2CraftList .row.v2Locked{opacity:.55;}
+.v2Tag{font-size:10px; color:var(--cyan); border:1px solid var(--cyan); padding:0 4px; margin-left:4px;}
+
+/* 찾기 */
+#v2Finder{position:fixed; inset:0; z-index:15000; display:none; align-items:flex-start; justify-content:center; background:rgba(5,3,15,.72); padding:6vh 12px 12px;}
+#v2FindBox{width:min(680px, 100%); max-height:86vh; display:flex; flex-direction:column; background:var(--panel); border:2px solid var(--rift); box-shadow:0 0 30px rgba(160,107,255,.35);}
+#v2FindTop{display:flex; gap:6px; padding:10px 10px 6px;}
+#v2FindQ{flex:1; background:var(--panel2); border:2px solid var(--line); color:var(--txt); font-family:inherit; font-size:15px; padding:9px 10px;}
+#v2FindQ:focus{outline:none; border-color:var(--cyan);}
+#v2FindHint{padding:0 12px 8px; font-size:11px; color:var(--mut);}
+#v2FindRes{overflow-y:auto; padding:0 10px 12px;}
+.v2FindItem{display:flex; justify-content:space-between; align-items:center; gap:10px; width:100%; text-align:left; margin-bottom:4px; padding:9px 10px; font-size:13px;}
+.v2FindItem small{color:var(--mut); font-size:11px; white-space:nowrap;}
+.v2FindEmpty{padding:18px 6px; color:var(--mut); font-size:13px; text-align:center;}
+.v2FindGroup{margin-bottom:10px;}
+.v2FindGName{font-size:12px; color:var(--cyan); margin:6px 0 5px; border-bottom:1px solid var(--line); padding-bottom:3px;}
+.v2FindChips{display:flex; flex-wrap:wrap; gap:5px;}
+.v2Chip{font-size:12px; padding:5px 8px;}
+.v2Hit{outline:3px solid var(--gold) !important; outline-offset:3px; animation:v2Hit 1.1s ease-in-out 2;}
+@keyframes v2Hit{0%,100%{outline-color:var(--gold);}50%{outline-color:transparent;}}
+
+/* 상단 줄: 버튼이 늘어도 글자가 두 줄로 쪼개지지 않게 */
+header{gap:12px;}
+.hud{flex-wrap:wrap; justify-content:flex-end; row-gap:6px;}
+.hud > span, .hud button{white-space:nowrap;}
+/* 알림창이 모험+ 탭의 고정 바로가기 줄(z-index 50)에 가려지던 문제 */
+#modalBg{z-index:9000;}
+#v2GoCraft{width:100%; margin:0 0 8px;}
+
+/* ═══════════════════ ☀️ 밝은 화면 ═══════════════════ */
+html.light{
+  --bg:#f3f0fb !important; --panel:#ffffff !important; --panel2:#efeaff !important; --line:#cdc4ee !important;
+  --rift:#7a3fe0 !important; --cyan:#0a8577 !important; --gold:#a06c00 !important; --red:#d02a4a !important; --green:#268a10 !important;
+  --txt:#231a44 !important; --mut:#6a6292 !important;
+  color-scheme:light;
+}
+html.light[data-accent="blue"]{
+  --bg:#eef4fc !important; --panel2:#e6eefb !important; --line:#bfd0ec !important; --rift:#1f6fd0 !important; --cyan:#0a7f96 !important;
+}
+html.light[data-accent="green"]{
+  --bg:#eff8f1 !important; --panel2:#e4f3e8 !important; --line:#b9dcc3 !important; --rift:#1c8a44 !important; --cyan:#5b7d00 !important;
+}
+html.light body{background-image:radial-gradient(ellipse 60% 40% at 50% -10%, rgba(160,107,255,.20) 0%, transparent 60%);}
+html.light button{box-shadow:0 3px 0 #c4baea;}
+html.light button:hover:not(:disabled){color:var(--rift);}
+html.light button:active:not(:disabled){box-shadow:0 1px 0 #c4baea;}
+html.light button.buy{border-color:#b3a2ec;}
+html.light button.danger{border-color:#e39aab; color:var(--red);}
+html.light button.gold-btn{border-color:#d3aa3c;}
+html.light .tabs button.on{box-shadow:0 3px 0 #c4baea, inset 0 -3px 0 var(--cyan);}
+html.light #upAmtRow .upAmtBox button.on{box-shadow:0 3px 0 #c4baea, inset 0 -3px 0 var(--gold);}
+html.light .pip, html.light .pip.boss, html.light .bar, html.light #expOuter, html.light #bossTimerWrap{background:#ddd6f5;}
+html.light #bossTimerTxt{color:#231a44; text-shadow:0 0 3px #fff;}
+html.light #bossBtn{color:var(--red);}
+html.light #bossBtn.ready{color:#fff; background:#c2334f;}
+html.light .box::before, html.light header::before{border-color:#e4ddf7;}
+html.light .dlc{border-color:#d3aa3c; background:#fbf6e6;}
+html.light #modalBg, html.light #confirmBg{background:rgba(40,30,80,.45);}
+html.light #confirmYes{background:var(--rift); color:#fff;}
+html.light #v2Finder{background:rgba(40,30,80,.40);}
+html.light .toast{box-shadow:0 4px 0 #c4baea, 0 0 18px rgba(60,40,120,.18);}
+html.light .toast.t-ok{border-color:#8fcf7f;} html.light .toast.t-info{border-color:#8fbfe6;}
+html.light .toast.t-warn{border-color:#d3aa3c;} html.light .toast.t-err{border-color:#e39aab;}
+html.light #devConsole input::placeholder{color:#999;}
+/* 등급 색: 흰 바탕에서도 읽히게 */
+html.light .gN{color:#6b7080 !important;} html.light .gR{color:#1d6fc4 !important;} html.light .gE{color:#7a3fe0 !important;}
+html.light .gU{color:#a06c00 !important;} html.light .gL{color:#c9580a !important;}
+html.light .gM{color:#d02a4a !important; text-shadow:none;}
+html.light .gC{color:#0a8577 !important; text-shadow:none;}
+html.light .gP{color:#3d3558 !important; text-shadow:0 0 6px rgba(160,107,255,.55);}
+html.light .gT{color:#087f86 !important; text-shadow:0 0 6px rgba(67,230,207,.6);}
+html.light .gO{color:#b0188f !important; text-shadow:0 0 6px rgba(255,45,149,.35);}
+html.light .gG{color:#9a5b00 !important; text-shadow:0 0 6px rgba(255,210,63,.6);}
+html.light .gA{color:#5a2bbf !important; text-shadow:0 0 6px rgba(160,107,255,.6);}
+html.light .gDEV{color:#d0147c !important; text-shadow:0 0 5px rgba(255,45,149,.35);}
+/* 화면 곳곳에 직접 박힌 색: 밝은 바탕에서 안 보이는 것만 골라 바꾼다.
+   (자기 배경색을 따로 가진 요소는 건드리지 않는다 — 어두운 배경 위 흰 글씨는 그대로 둬야 하므로) */
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#fff"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color: #fff"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:white"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#e8e8f0"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#cfc9f2"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#ddd"]:not([style*="background"]){color:var(--txt) !important;}
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#ffd23f"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#ffd88a"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#FFD23F"]:not([style*="background"]){color:var(--gold) !important;}
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#43e6cf"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#7bffea"]:not([style*="background"]){color:var(--cyan) !important;}
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#7bffb4"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#8cff6b"]:not([style*="background"]){color:var(--green) !important;}
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#a86bff"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#c07bff"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#9a8cff"]:not([style*="background"]){color:var(--rift) !important;}
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#ffb3c0"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#ffb6ff"]:not([style*="background"]){color:var(--red) !important;}
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#aaa"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#888"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#8a80a4"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#6a6280"]:not([style*="background"]){color:var(--mut) !important;}
+/* 스크립트가 el.style.color 로 넣은 색은 rgb(...) 꼴로 기록되므로 그 꼴도 함께 보정 */
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color: rgb(255, 255, 255)"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color: rgb(234, 230, 255)"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color: rgb(207, 201, 242)"]:not([style*="background"]){color:var(--txt) !important;}
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color: rgb(255, 210, 63)"]:not([style*="background"]){color:var(--gold) !important;}
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color: rgb(67, 230, 207)"]:not([style*="background"]){color:var(--cyan) !important;}
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color: rgb(160, 107, 255)"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color: rgb(168, 107, 255)"]:not([style*="background"]){color:var(--rift) !important;}
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color: rgb(140, 255, 107)"]:not([style*="background"]),
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color: rgb(123, 255, 180)"]:not([style*="background"]){color:var(--green) !important;}
+html.light :is(.wrap,#modalBg,#confirmBg) [style*="color:#eae6ff"]:not([style*="background"]){color:var(--txt) !important;}
+</style>
 <body>
 <!-- 🎉 GUI 알림: 토스트 컨테이너 + 확인 모달 -->
 <div id="toastWrap"></div>
@@ -715,6 +998,8 @@ input, textarea, [contenteditable], [style*="user-select:all"], [style*="user-se
     <button id="saveBtn" style="display:none; font-size:11px; padding:4px 8px;">수동 저장</button>
     <button onclick="openPoker()" class="buy" style="font-size:11px; padding:6px 8px; background:linear-gradient(135deg, #e94560, #ffd23f);">🃏 포커</button>
     <button onclick="openSlotMachine()" class="buy" style="font-size:11px; padding:6px 8px; background:linear-gradient(135deg,#2d1b4e,#ffd23f);">🎰 슬롯머신</button>
+    <button id="finderBtn" class="buy" title="기능 찾기 (단축키 / 또는 Ctrl+K)">🔍 찾기</button>
+    <button id="modeBtn" class="buy" title="밝은 화면으로">☀️ 밝게</button>
   </div>
 </header>
 
@@ -749,6 +1034,7 @@ input, textarea, [contenteditable], [style*="user-select:all"], [style*="user-se
     </div>
     <div style="font-size:11px; color:var(--mut); margin-top:5px;">🖱 <b style="color:var(--cyan)">수동 전투 모드</b> — 몬스터를 직접 클릭해서 공격하세요 (쿨타임 0.01초). 게임을 꺼두면 만물상이 자동으로 사냥합니다.</div>
     <div id="bossTimerWrap"><div id="bossTimer"></div><div id="bossTimerTxt">30.0s</div></div>
+    <div id="bossPatBar"></div>
 
     <div class="bars">
       <div class="barbox">
@@ -787,6 +1073,13 @@ input, textarea, [contenteditable], [style*="user-select:all"], [style*="user-se
 
     <div class="tabpage on" id="tab-up">
       <h2>스탯 영구 강화</h2>
+      <div class="row" id="upAmtRow">
+        <div class="info">한 번에 올릴 횟수<small>아래 강화 버튼을 누르면 이만큼 한꺼번에 올립니다</small></div>
+        <div class="upAmtBox">
+          <button type="button" data-amt="1">1</button><button type="button" data-amt="10">10</button><button type="button" data-amt="100">100</button><button type="button" data-amt="1000">1000</button><button type="button" data-amt="max">최대</button>
+          <input type="number" id="upAmt" value="1" min="1" max="100000" inputmode="numeric" placeholder="직접 입력">
+        </div>
+      </div>
       <div class="row">
         <div class="info">공격력 강화 <span id="atkLvTxt"></span><small id="atkGainTxt"></small></div>
         <button id="upAtk" class="gold-btn"></button>
@@ -1616,9 +1909,14 @@ function closeSlotMachine(){
 
 function startPokerGame(){
   console.log('포커 시작');
+  // (v2) 판돈은 시작할 때 골드에서 빼서 맡겨 둔다 → 포커 도중 골드를 써도 끝날 때 되살아나지 않음
+  if(pokerGame.active) return;
+  if(!((S.gold||0) >= 1000)){ alert('포커는 1,000골드(칩 10개) 이상 있어야 할 수 있습니다.'); return; }
   pokerGame.active = true;
-  pokerGame.chips = Math.max(10, Math.floor(S.gold / 100));
+  pokerGame.chips = Math.floor(S.gold / 100);
+  S.gold = Math.max(0, S.gold - pokerGame.chips * 100);
   pokerGame.playerChips = pokerGame.chips;
+  pokerHoldSync();
   pokerGame.dealerChips = pokerGame.chips;
   pokerGame.pot = 0;
   pokerGame.playerBet = 0;
@@ -1771,9 +2069,16 @@ function confirmBet(){
   pokerBet(betAmount);
 }
 
+// (v2) 지금 내 칩만큼을 세이브에 '맡긴 돈'으로 적어 둔다. 창을 닫아도 이 금액만 돌아온다.
+function pokerHoldSync(){
+  try{ S.pokerHold = Math.max(0, pokerGame.playerChips||0) * 100; saveGame(true); }catch(e){}
+}
 function pokerBet(amount){
+  amount = Math.floor(Number(amount));
+  if(!pokerGame.active || !(amount >= 1) || amount > pokerGame.playerChips) return;
   pokerGame.playerChips -= amount;
   pokerGame.pot += amount;
+  pokerHoldSync();
 
   setTimeout(()=>{
     if(Math.random() > 0.3){
@@ -1783,6 +2088,7 @@ function pokerBet(amount){
     } else {
       pokerGame.playerChips += pokerGame.pot;
       pokerGame.pot = 0;
+      pokerHoldSync();
       alert('🎉 딜러 폴드! 당신의 승리!');
       closePokerGame();
       return;
@@ -1810,6 +2116,7 @@ function pokerCheck(){
     }
 
     pokerGame.pot = 0;
+    pokerHoldSync();          // (v2) 결과를 먼저 저장한 뒤에 알림 → 진 걸 보고 창을 닫아도 소용없음
     alert(result);
     closePokerGame();
   }, 500);
@@ -1818,14 +2125,17 @@ function pokerCheck(){
 function pokerFold(){
   pokerGame.dealerChips += pokerGame.pot;
   pokerGame.pot = 0;
+  pokerHoldSync();
   alert('📉 폴드했습니다');
   closePokerGame();
 }
 
 function closePokerGame(){
+  if(!pokerGame.active){ return; }
   pokerGame.active = false;
-  const finalGold = pokerGame.playerChips * 100;
-  S.gold = finalGold;
+  const finalGold = Math.max(0, pokerGame.playerChips||0) * 100;
+  S.gold = (S.gold||0) + finalGold;      // (v2) 덮어쓰지 않고, 맡겼던 칩만큼만 돌려받는다
+  S.pokerHold = 0;
 
   const pokerDiv = document.getElementById('pokerGameModal');
   if(pokerDiv) pokerDiv.remove();
@@ -2291,9 +2601,11 @@ function renderStoryUI(){
 
 
 function endPokerGame(){
+  if(!pokerGame.active){ return; }
   pokerGame.active = false;
-  const finalGold = pokerGame.playerChips * 100;
-  S.gold = finalGold;
+  const finalGold = Math.max(0, pokerGame.playerChips||0) * 100;
+  S.gold = (S.gold||0) + finalGold;
+  S.pokerHold = 0;
 
   const pokerModal = document.getElementById('pokerModal');
   if(pokerModal) pokerModal.remove();
@@ -2965,11 +3277,13 @@ const NET = (() => {
   async function connect(){
     for(const url of candidates()){
       try{
+        const _t0 = performance.now();
         const res = await fetch(url + '/ping', {method:'POST',
           headers:{'Content-Type':'application/json'}, body:'{}'});
         if(res.ok){
           const j = await res.json();
           if(j && j.server === 'rift'){
+            try{ if(window.__riftTime && j.time) window.__riftTime.sync(j.time*1000 + 500, _t0, performance.now()); }catch(e){}   // (v2) 서버 시각으로 시계 맞춤
             const connectUrl = normalizeServerUrl((j && (j.connect_url || j.public_url)) || url) || normalizeServerUrl(url);
             base = connectUrl; online = true;
             try{ storage.setItem('rift-server-url', connectUrl); }catch(e){}
@@ -2982,6 +3296,7 @@ const NET = (() => {
       }catch(e){}
     }
     online = false; base = null;
+    try{ if(window.__riftTime) window.__riftTime.settle(); }catch(e){}
     console.log('⚠️ 오프라인 모드 (server.py 미실행)');
     updateNetBadge();
     return false;
@@ -4725,6 +5040,10 @@ let currentDifficulty = 'normal';
 //   3001~10000 차원 1개 = 100스테이지 (흥정 ~ 만물의 주인)
 // ============================================================================
 const MAX_STAGE = 10000;  // +7000 스테이지 확장 (만물상 그 너머: 흥정 ~ 만물의 주인)
+// 장비·퀘스트 보상처럼 '스테이지 제곱'으로 커지는 공식에 넣는 스테이지 값.
+//   3000 이후에는 몬스터 성장이 완만해지므로(위 lhp 참고) 같은 비율(약 6%)로만 오르게 한다.
+//   그대로 두면 장비 공격력이 4,280층 근처에서 무한대(Infinity)가 되어 게임이 깨진다.
+function effStage(s){ s = Number(s) || 1; return s <= 3000 ? s : 3000 + (s - 3000) * 0.06; }
 
 const TIERS = [
   {id:'normal', name:'일반',  icon:'',   start:1,   end:100, hpMul:1,      atkMul:1,     goldMul:1,    color:'#43e6cf', pfx:''},
@@ -6024,7 +6343,42 @@ let memSave = null;
 
 /* ---------- 고유이름 / 관리자 계정 ---------- */
 const ADMIN_NICK = '개발자';
-const ADMIN_PASSWORD = ['dajkfbqsjhfgeqkfejkfhweiuuqnsiqjsidwidj23891381983293898329328304928'].join('');  // 관리자 암호 (95줄)
+// 🔒 (v2) 관리자 비밀번호는 더 이상 코드에 들어 있지 않습니다.
+//    관리자가 직접 입력하면 서버가 맞는지 확인하고, 맞을 때만 이 기기에 보관합니다.
+let ADMIN_PASSWORD = '';
+try{ ADMIN_PASSWORD = localStorage.getItem('rift-admin-pass') || ''; }catch(e){}
+async function adminVerifyPass(pass){
+  if(!pass || typeof NET === 'undefined' || !NET.isOnline()) return false;
+  try{ const r = await NET.req('/admin/backup/list', {pass: pass}); return !!(r && r.ok); }catch(e){ return false; }
+}
+function adminAskPass(){
+  return new Promise(function(done){
+    const bg = document.createElement('div');
+    bg.style.cssText = 'position:fixed;inset:0;z-index:30000;background:rgba(5,3,15,.82);display:flex;align-items:center;justify-content:center;padding:16px;';
+    bg.innerHTML = '<div style="background:var(--panel);border:2px solid var(--gold);padding:18px;max-width:340px;width:100%;">'
+      + '<div style="color:var(--gold);font-size:15px;margin-bottom:10px;">👑 관리자 인증</div>'
+      + '<input id="admPassIn" type="password" autocomplete="off" placeholder="관리자 비밀번호" style="width:100%;background:var(--panel2);border:2px solid var(--line);color:var(--txt);font-family:inherit;font-size:14px;padding:9px;">'
+      + '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px;"><button id="admPassNo">취소</button><button id="admPassOk" class="gold-btn">확인</button></div></div>';
+    document.body.appendChild(bg);
+    const inp = bg.querySelector('#admPassIn');
+    const end = function(v){ bg.remove(); done(v); };
+    bg.querySelector('#admPassOk').onclick = function(){ end(inp.value); };
+    bg.querySelector('#admPassNo').onclick = function(){ end(''); };
+    inp.addEventListener('keydown', function(ev){ if(ev.key === 'Enter') end(inp.value); if(ev.key === 'Escape') end(''); });
+    setTimeout(function(){ try{ inp.focus(); }catch(e){} }, 30);
+  });
+}
+async function adminLogin(){
+  if(typeof NET === 'undefined' || !NET.isOnline()){ alert('서버에 연결된 상태에서만 관리자 인증을 할 수 있습니다.'); return false; }
+  const pass = await adminAskPass();
+  if(!pass) return false;
+  if(!(await adminVerifyPass(pass))){ alert('비밀번호가 틀렸습니다.'); return false; }
+  ADMIN_PASSWORD = pass;
+  try{ localStorage.setItem('rift-admin-pass', pass); }catch(e){}
+  try{ if(typeof showToast === 'function') showToast('👑 관리자 인증 완료', 'ok'); }catch(e){}
+  return true;
+}
+function adminLogout(){ ADMIN_PASSWORD = ''; try{ localStorage.removeItem('rift-admin-pass'); }catch(e){} }
 
 
 
@@ -6067,7 +6421,7 @@ function spawnMob(isBoss){
     mob.shield = hp*0.3; mob.shieldMax = mob.shield;
     log('<span class="c">🛡 보호막 보스! 파란 보호막을 먼저 부수세요.</span>');
   }
-  if(!isBoss && Math.random()<0.01){
+  if(!isBoss && !window.__riftNoGolden && Math.random()<0.01){   // (v2) 수동 이동으로 생긴 몹은 황금 추첨 없음
     mob.golden = true; mob.until = Date.now()+10000;
     mob.hp = mob.maxHp = hp*3;
     log('<span class="g">✨ 황금 슬라임 출현! 10초 안에 최대한 두들기세요!</span>');
@@ -6125,7 +6479,7 @@ function dropEquip(wi, isBoss){
   const span = Math.max(6, Math.floor(pool.length * (0.12 + S.stage/100 * 0.88)));
   const baseName = pool[Math.floor(Math.random() * Math.min(span, pool.length))];
   const gm = Math.pow(2.4, GRADES.indexOf(grade));
-  const base = Math.round((type==='weapon'?8:5) * Math.pow(1.18, S.stage-1) * gm);
+  const base = Math.round((type==='weapon'?8:5) * Math.pow(1.18, effStage(S.stage)-1) * gm);
   // 자동 판매 필터
   if(S.autoSell && (grade==='Normal' || grade==='Rare')){
     S.gold += Math.floor(base*2); recGold(Math.floor(base*2));
@@ -6564,7 +6918,7 @@ function renderShop(){
     if(isVIP()){
       const dl = document.getElementById('vipDaysLeft'); if(dl) dl.textContent = '('+vipDaysLeft()+'일 남음)';
       const ab = document.getElementById('autoBattleBtn'); if(ab){ ab.textContent = S.autoBattle?'ON':'OFF'; ab.style.color = S.autoBattle?'var(--green)':''; }
-      const today = new Date().toDateString();
+      const today = riftToday();
       const dbtn = document.getElementById('vipDailyBtn');
       if(dbtn){ const claimed = S.vipDaily && S.vipDaily.last===today; dbtn.textContent = claimed?'내일':'수령'; dbtn.disabled = claimed; }
       const di = document.getElementById('vipDungeonInfo');
@@ -6590,7 +6944,7 @@ function toggleAutoBattle(){
 // 👑 VIP: 오늘의 무기 패키지
 function claimVipDaily(){
   if(!isVIP()){ log('<span class="r">VIP 전용입니다.</span>'); return; }
-  const today = new Date().toDateString();
+  const today = riftToday();
   if(!S.vipDaily) S.vipDaily = {last:'', dungeonUses:0};
   if(S.vipDaily.last === today){ log('<span class="y">오늘은 이미 수령했습니다.</span>'); return; }
   S.vipDaily.last = today; S.vipDaily.dungeonUses = 0;
@@ -6609,7 +6963,7 @@ function claimVipDaily(){
 // 👑 VIP: 전용 일일 던전 (하루 3회) — 강화된 보상 사냥터
 function enterVipDungeon(){
   if(!isVIP()){ log('<span class="r">VIP 전용 콘텐츠입니다.</span>'); return; }
-  const today = new Date().toDateString();
+  const today = riftToday();
   if(!S.vipDaily) S.vipDaily = {last:'', dungeonUses:0};
   if(S.vipDaily.last !== today){ S.vipDaily.last = today; S.vipDaily.dungeonUses = 0; }
   if((S.vipDaily.dungeonUses||0) >= 3){ log('<span class="y">오늘 VIP 던전 입장을 모두 사용했습니다.</span>'); return; }
@@ -10405,7 +10759,7 @@ function farmStageTo(n){
   if(n === S.stage) return;
   S.stage = n; S.kills = 0; S.bossKills = 0;
   if(S.quest) S.quest.current = 0;
-  if(typeof spawnMob === 'function') spawnMob(false);
+  if(typeof spawnMob === 'function'){ window.__riftNoGolden = true; try{ spawnMob(false); } finally { window.__riftNoGolden = false; } }
   log('🔁 <b>'+n+'층</b>으로 이동! (클리어 지역 파밍 · 최고기록 '+cap+'층)');
   renderAll(); saveGame(true);
 }
@@ -10926,7 +11280,7 @@ function makeGachaWeapon(premium, forceLegend){
   let name = W_PREFIX[Math.floor(Math.random()*W_PREFIX.length)]+' '+W_CORE[Math.floor(Math.random()*W_CORE.length)];
   if(premium) name += ' '+W_SUFFIX[Math.floor(Math.random()*W_SUFFIX.length)];
   const mult = (premium?1.8:1.2) + gi*0.5;
-  const base = Math.round(8 * Math.pow(1.18, S.stage-1) * mult * Math.pow(2, gi));
+  const base = Math.round(8 * Math.pow(1.18, effStage(S.stage)-1) * mult * Math.pow(2, gi));
   const el = ELEM_KEYS[Math.floor(Math.random()*5)];
   return {id:S.nextId++, type:'weapon', grade, name, base, enh:0, fx:true, el, opts:rollEquipOpts(grade)};
 }
@@ -11013,8 +11367,8 @@ function questProgress(){
     log('<span class="g">🎯 퀘스트 완료! +'+fmt(S.quest.goldReward)+'G / +'+fmt(S.quest.expReward)+' EXP</span>');
     S.quest.current = 0;
     S.quest.targetMax = 5 + S.stage;
-    S.quest.goldReward = Math.floor(50 * Math.pow(1.15, S.stage-1));
-    S.quest.expReward = Math.floor(20 * Math.pow(1.12, S.stage-1));
+    S.quest.goldReward = Math.floor(50 * Math.pow(1.15, effStage(S.stage)-1));
+    S.quest.expReward = Math.floor(20 * Math.pow(1.12, effStage(S.stage)-1));
   }
 }
 
@@ -11069,7 +11423,7 @@ function devSkipStage(n){
   if(S.stage > (S.maxStage||1)) S.maxStage = S.stage;
   S.quest.current = 0;
   S.bossKills = 0;
-  if(typeof spawnMob === 'function') spawnMob(false);
+  if(typeof spawnMob === 'function'){ window.__riftNoGolden = true; try{ spawnMob(false); } finally { window.__riftNoGolden = false; } }
   log('<span class="gP">👑 [개발자] 스테이지 ' + (n>0?'+':'') + n + ' → 현재 ' + S.stage + '</span>');
   renderAll(); saveGame(true);
 }
@@ -11082,7 +11436,7 @@ function devGotoStage(n){
   if(S.stage > (S.maxStage||1)) S.maxStage = S.stage;
   S.quest.current = 0;
   S.bossKills = 0;
-  if(typeof spawnMob === 'function') spawnMob(false);
+  if(typeof spawnMob === 'function'){ window.__riftNoGolden = true; try{ spawnMob(false); } finally { window.__riftNoGolden = false; } }
   log('<span class="gP">👑 [개발자] 스테이지 ' + n + ' 로 이동</span>');
   renderAll(); saveGame(true);
 }
@@ -11131,6 +11485,10 @@ function devGiveAllPets(){
 }
 
 function devDeny(){
+  if(S && S.nickname === ADMIN_NICK && !ADMIN_PASSWORD){
+    log('<span class="r">⛔ 관리자 인증이 필요합니다. 설정 탭 → 👑 관리자 인증에서 비밀번호를 입력하세요.</span>');
+    return;
+  }
   log('<span class="r">⛔ 개발자 전용 명령어입니다. (고유이름을 "개발자"로 설정하세요)</span>');
 }
 
@@ -11681,7 +12039,7 @@ const MISSION_POOL = [
 ];
 
 function ensureDaily(){
-  const day = new Date().toDateString();
+  const day = riftToday();
   if(S.day !== day){
     S.day = day;
     S.goldDgnUses = 0;
@@ -11695,7 +12053,7 @@ function ensureDaily(){
     S.missions = picks;
     // 📅 출석 처리 (연속 여부 판정)
     if(!S.attend) S.attend = {streak:0, last:'', claimedToday:false};
-    const yesterday = new Date(Date.now()-86400000).toDateString();
+    const yesterday = riftYesterday();
     if(S.attend.last === yesterday){ /* 연속 유지 */ }
     else if(S.attend.last !== day){ S.attend.streak = 0; }  // 연속 끊김
     S.attend.claimedToday = false;
@@ -11707,7 +12065,7 @@ function ensureDaily(){
 // 출석 보상 받기
 function claimAttendance(){
   ensureDaily();
-  const day = new Date().toDateString();
+  const day = riftToday();
   if(S.attend.claimedToday){ alert('오늘은 이미 출석했습니다'); return; }
   S.attend.streak = (S.attend.streak||0) + 1;
   S.attend.last = day;
@@ -11909,6 +12267,7 @@ const Audio8 = (() => {
 // ---------------- 효과음 정의 ----------------
 function sfx(t){
   if(!S || !S.settings || !S.settings.sfx) return;
+  if(document.hidden || window.__riftSimulating) return;   // (v2) 가려진 탭·밀린 시간 따라잡는 중에는 효과음 끔
   try{
     switch(t){
       case 'hit':      // 기본 타격: 노이즈 펀치 + 저음 임팩트
@@ -12275,17 +12634,33 @@ function expandBag(){
   log('<span class="c">🎒 가방 확장! 현재 '+S.invCap+'칸</span>');
   renderAll(); saveGame(true);
 }
+// (v2) 세이브 코드에 검증값을 붙인다 → 코드를 풀어서 골드 숫자를 고친 뒤 다시 넣는 꼼수 차단
+function saveCodeSig(body){
+  const s = 'rift-shop/sv2|' + body + '|' + body.length;
+  let h1 = 0x811c9dc5, h2 = 0x9e3779b1;
+  for(let i=0;i<s.length;i++){
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193);
+    h2 = Math.imul(h2 ^ (c + (i & 255)), 0x85ebca6b); h2 ^= h2 >>> 13;
+  }
+  return (h1>>>0).toString(36) + (h2>>>0).toString(36);
+}
 function exportSave(){
   try{
-    const code = btoa(unescape(encodeURIComponent(JSON.stringify(S))));
-    prompt('아래 세이브 코드를 복사해 보관하세요:', code);
+    const body = btoa(unescape(encodeURIComponent(JSON.stringify(S))));
+    prompt('아래 세이브 코드를 복사해 보관하세요:', 'R2.' + body + '.' + saveCodeSig(body));
   }catch(e){ alert('내보내기 실패'); }
 }
 function importSave(){
   const code = prompt('세이브 코드를 붙여넣으세요:');
   if(!code) return;
   try{
-    const d = JSON.parse(decodeURIComponent(escape(atob(code.trim()))));
+    const m = /^R2\.([A-Za-z0-9+\/=]+)\.([a-z0-9]+)$/.exec(code.trim());
+    if(!m || saveCodeSig(m[1]) !== m[2]){
+      alert('코드가 올바르지 않거나 내용이 바뀌었습니다.\n(이번 업데이트 전에 만든 옛 코드는 쓸 수 없어요. 설정에서 코드를 새로 내보내 주세요.)');
+      return;
+    }
+    const d = JSON.parse(decodeURIComponent(escape(atob(m[1]))));
     localStorage.setItem(SAVE_KEY, JSON.stringify(d));
     location.reload();
   }catch(e){ alert('코드가 올바르지 않습니다.'); }
@@ -12487,7 +12862,7 @@ function setDifficulty(diff) {
   storage.setItem('rift-difficulty', diff);
   const _dm = document.getElementById('difficultyModal'); if(_dm) _dm.style.display = 'none';
   log('<span class="c">난이도: ' + (diff === 'easy' ? '🟢 쉬움' : diff === 'normal' ? '🟡 보통' : '🔴 어려움') + '</span>');
-  spawnMob(false);
+  window.__riftNoGolden = true; try{ spawnMob(false); } finally { window.__riftNoGolden = false; }
   renderStats();
 }
 
@@ -12519,6 +12894,7 @@ function loadDifficulty() {
     const hasPy = await PYWEBVIEW_READY;
     if(hasPy){ await restoreFromPyStorage(); }
   } catch(e) { console.error('py 복원 실패:', e); }
+  try{ await window.__riftBootReady; }catch(e){}   // (v2) 서버 시각 확인·이전 탭 저장이 끝난 뒤에 세이브를 읽는다
   const loaded = await loadGame();
   if(loaded){
     loadDifficulty();
@@ -13321,7 +13697,8 @@ const usedNicknames = (() => {
 })();
 
 function isAdmin(nick){ return nick === ADMIN_NICK; }
-function checkAdminAccess(){ return !!(S && S.nickname === ADMIN_NICK); }
+// (v2) 닉네임만으로는 부족하고, 서버가 확인해 준 비밀번호가 이 기기에 있어야 관리자로 본다
+function checkAdminAccess(){ return !!(S && S.nickname === ADMIN_NICK && ADMIN_PASSWORD); }
 
 // 이 기기(브라우저)를 식별하는 영구 토큰 — 서버에 닉네임 소유권을 등록할 때 사용
 function getClientToken(){
@@ -13385,11 +13762,8 @@ async function changeNickname(nick){
   }
 
   if(nick === ADMIN_NICK){
-    const pass = prompt('"' + ADMIN_NICK + '"은(는) 예약된 이름입니다. 관리자 비밀번호를 입력하세요:', '');
-    if(pass !== ADMIN_PASSWORD){
-      alert('비밀번호가 틀렸습니다. 다른 닉네임을 사용해주세요.');
-      return;
-    }
+    // (v2) 예약된 이름: 서버가 비밀번호를 확인해 줘야만 쓸 수 있다
+    if(!(await adminLogin())) return;
   } else if(typeof NET !== 'undefined' && NET.isOnline()){
     // 온라인이면 서버에 전역으로 소유권 확인/등록 (다른 사람이 먼저 썼으면 사용 불가)
     const rr = await NET.req('/nick/claim', {nick, token:getClientToken()});
@@ -14151,7 +14525,7 @@ function enterHidden(id){
   if(S.ext.hidden[id]){ log('<span class="y">이미 정복한 던전입니다.</span>'); return; }
   S.ext.hidden[id]=true;
   const gm = Math.pow(2.4, GRADES.indexOf(d.item.grade));
-  const base = Math.round(10*Math.pow(1.18,(S.maxStage||1))*gm*1.2);
+  const base = Math.round(10*Math.pow(1.18,effStage(S.maxStage||1))*gm*1.2);
   const invCap = S.invCap||30;
   let got = '';
   if(S.equips.length < invCap){
@@ -14321,8 +14695,42 @@ const RIFT_STORY = [
   {ch:5, stage:55,  title:'제4장 — 리치의 증언',      txt:'명계의 리치가 거래를 제안하며 말했다.<br>"균열은 차원의 상처가 아니다. <b>문(門)</b>이다.<br>그리고 문에는 반드시… 문지기가 있지."'},
   {ch:6, stage:70,  title:'제5장 — 문지기의 정체',    txt:'공허 드레이크가 쓰러지며 웃었다.<br>"문지기는 바로 너다, 만물상.<br>물건을 사고파는 자만이 두 세계를 오갈 자격을 갖는다."'},
   {ch:7, stage:85,  title:'제6장 — 첫 번째 만물상',   txt:'균열 최심부의 벽화에 그려진 것은… 수레를 끄는 상인.<br>태초에 차원을 잇고 만물을 유통한 존재.<br>당신의 핏줄에 흐르는 것은 우연이 아니었다.'},
-  {ch:8, stage:100, title:'최종장 — 균열의 진실',     txt:'균열의 거신이 무릎 꿇고 고한다.<br>"세계는 교환으로 이어진다. 균열은 그 증거.<br><b>그대가 장사를 계속하는 한, 두 세계는 공존한다.</b>"<br><br>— 그래서 만물상은 오늘도 가게 문을 연다. <span class="gP">Fin. (그리고 무한 반복…)</span>'},
+  {ch:8, stage:100, title:'1막 종장 — 균열의 진실',     txt:'균열의 거신이 무릎 꿇고 고한다.<br>"세계는 교환으로 이어진다. 균열은 그 증거.<br><b>그대가 장사를 계속하는 한, 두 세계는 공존한다.</b>"<br><br>— 그래서 만물상은 오늘도 가게 문을 연다. <span class="gP">1막 끝. (이야기는 균열 너머로 이어집니다…)</span>'},
+  // ── 2막: 균열 너머 (101~3000) ──
+  {ch:9,  stage:101,  title:'제7장 — 끝이 아니었다',       txt:'거신이 물러난 자리에, 문이 하나 더 있었다.<br>거신은 "두 세계"라고 했지만, 옛 장부의 칸은 둘이 아니었다.<br>세어 보니 칸은… 끝없이 이어져 있었다.'},
+  {ch:10, stage:150,  title:'제8장 — 골드를 받지 않는 손님', txt:'이곳 손님들은 골드 대신 <b>기억</b>으로 값을 치른다.<br>어떤 몬스터는 물약 한 병에 제 이름을 내놓았다.<br>당신은 처음으로 거스름돈을 어떻게 줘야 할지 몰랐다.'},
+  {ch:11, stage:201,  title:'제9장 — 혼돈의 가격표',        txt:'혼돈의 차원에서는 가격표가 매 순간 바뀐다.<br>당신은 장사의 첫 번째 법칙을 다시 배운다.<br>"값은 정해진 것이 아니라, <b>합의된 것</b>이다."'},
+  {ch:12, stage:301,  title:'제10장 — 장부의 주인',         txt:'무한의 차원 한복판에서 낯익은 글씨의 주인을 만났다.<br>그는 같은 손님에게 같은 물건을 끝없이 팔고 있었다.<br>"나는 균열의 심장에 닿았네. 거긴 가게였어. <b>텅 빈 가게.</b>"'},
+  {ch:13, stage:501,  title:'제11장 — 빗금',               txt:'윤회의 차원에 당신의 수레가 서 있었다. 훨씬 낡은 모습으로.<br>옆구리에는 빗금이 새겨져 있다. 당신이 차원을 무너뜨린 횟수만큼.<br>누군가 계속 세고 있었다.'},
+  {ch:14, stage:751,  title:'제12장 — 결말 할인',           txt:'운명의 차원이 당신의 "결말"을 반값에 팔겠다고 한다.<br>당신은 고개를 저었다.<br>"만물상은 결말을 사지 않아. <b>팔지.</b>"'},
+  {ch:15, stage:1001, title:'제13장 — 단골',               txt:'명계에서 그 리치를 다시 만났다. 이번엔 단골손님으로.<br>"문지기여, 문이 몇 개인지 세어 봤나?"<br>"…나는 세다가 죽었지."'},
+  {ch:16, stage:1251, title:'제14장 — 진열대',             txt:'여명의 빛 아래에서 비로소 전체가 보였다.<br>차원들은 층층이 쌓인 선반이었다.<br>세계는 <b>진열</b>되어 있었다. 누구를 위해서?'},
+  {ch:17, stage:1501, title:'제15장 — 이름 없는 숫자',      txt:'무량, 불가사의, 나유타… 값이 이름 붙일 수 있는 수를 넘어섰다.<br>옛 상인의 쪽지가 선반 틈에 끼워져 있다.<br>"숫자가 이름을 잃는 곳에서 <b>흥정</b>은 시작된다."'},
+  {ch:18, stage:1701, title:'제16장 — 팔린 하늘',           txt:'만물의 차원에는 흩어졌던 것도, 팔려 나간 것도 전부 놓여 있다.<br>그 사이에서 당신은 보랏빛 하늘 한 조각을 발견했다. 가격표가 붙은 채로.<br>당신 세계의 하늘은 찢어진 게 아니었다. <b>팔린 것</b>이었다.'},
+  {ch:19, stage:2001, title:'제17장 — 영수증',             txt:'균열의 끝에서 하늘을 사 간 자의 영수증을 찾았다.<br>파는 이의 서명란에 찍힌 것은 수레 모양의 인장.<br>첫 번째 만물상이 문을 열기 위해 하늘을 팔았다.'},
+  {ch:20, stage:2251, title:'제18장 — 반품 불가',           txt:'블랙홀 앞에 팻말이 서 있다. "반품 불가."<br>한번 넘어간 값은 돌아오지 않는다.<br>첫 번째 만물상은 이 너머로 갔다. 당신도 수레를 민다.'},
+  {ch:21, stage:2501, title:'제19장 — 가장 작은 단위',      txt:'더는 쪼갤 수 없는 거래의 최소 단위가 있었다.<br>골드도, 기억도 아니었다.<br><b>약속 한 개.</b> 모든 값은 거기서부터 쌓인다.'},
+  {ch:22, stage:2751, title:'제20장 — 직함',               txt:'어디에나 그 인장이 찍혀 있다. 한 사람이 다닐 수 있는 길이 아니다.<br>그제야 알았다. "첫 번째 만물상"은 사람이 아니다.<br><b>가게 문을 계속 여는 자</b>에게 넘어가는 직함이다.'},
+  {ch:23, stage:3000, title:'제21장 — 텅 빈 가게',          txt:'균열의 심장에는 정말로 가게가 있었다. 텅 빈.<br>계산대 위 장부 첫 줄에는 이미 당신의 이름이 적혀 있다.<br>당신이 자리에 앉자, 문에 달린 종이 울렸다. <b>바깥에서 온 손님이다.</b>'},
+  // ── 3막: 만물상 그 너머 (3001~10000) ──
+  {ch:24, stage:3001, title:'제22장 — 첫 흥정',            txt:'손님은 모든 차원의 바깥에서 왔다고 했다.<br>사려는 물건은 하나.<br>"<b>균열 그 자체</b>를 주시오. 값은 부르는 대로."'},
+  {ch:25, stage:3501, title:'제23장 — 여백의 조항',         txt:'계약서는 훌륭했다. 여백을 읽기 전까지는.<br>"균열의 소유권이 넘어가면, 모든 문은 닫힌다."<br>두 세계도, 그 너머의 선반들도 전부.'},
+  {ch:26, stage:4001, title:'제24장 — 더 나은 제안',        txt:'거절하려면 더 나은 것을 내놓아야 한다. 그게 흥정이다.<br>당신은 어느 차원에도 없는 물건을 찾아 교역로에 오른다.<br>나루터, 사막길, 비단길. 수레 바퀴가 처음 듣는 소리를 낸다.'},
+  {ch:27, stage:4501, title:'제25장 — 암시장의 하늘',       txt:'암시장에서는 가짜 하늘을 판다. 꽤 잘 팔린다.<br>찢긴 하늘을 가진 세계가 당신의 세계만이 아니었던 것이다.<br>진품을 되찾을 길은 하나. <b>꿰매는 것.</b>'},
+  {ch:28, stage:5001, title:'제26장 — 바늘',               txt:'장인들의 차원. 하늘을 꿰매려면 바늘이 있어야 한다.<br>풀무질하고, 모루에 올리고, 담금질하기를 수천 번.<br>그들은 그 바늘을 <b>신기(神器)</b>라고 불렀다.'},
+  {ch:29, stage:5501, title:'제27장 — 새길 이름',           txt:'바늘에는 만든 가게의 이름을 새겨야 한다고 했다.<br>당신은 한참을 서 있었다.<br>이 가게에는 이름이 없었다. 처음부터 그냥 "만물상"이었다.'},
+  {ch:30, stage:6001, title:'제28장 — 어제의 손님',         txt:'시간의 차원에서 어제의 당신이 가게에 들어왔다.<br>내일의 당신에게 줄 물건을 맡기고 갔다.<br>상자 안에는 쪽지 한 장. "아직 팔지 마."'},
+  {ch:31, stage:6501, title:'제29장 — 예언',               txt:'예언의 차원이 값을 받고 한 줄을 내주었다.<br>"만물상은 <b>마지막 손님</b>에게 가게를 판다."<br>당신은 거스름돈을 세며 생각했다. 예언도 흥정이 되는가.'},
+  {ch:32, stage:7001, title:'제30장 — 손님들의 꿈',         txt:'꿈의 차원에서, 당신이 쓰러뜨린 몬스터들이 꿈을 꾸고 있었다.<br>줄을 서서 물건을 고르는 꿈.<br>그들이 골드를 지니고 있던 이유. 처음부터 <b>손님</b>이었다.'},
+  {ch:33, stage:7501, title:'제31장 — 처음의 소원',         txt:'무의식의 바닥에서 오래된 소원 하나를 건졌다. 당신의 글씨다.<br>"누구에게든 팔 수 있다면."<br>하늘을 판 것은 첫 번째 만물상. 그리고 그 직함은 지금 당신 것이다.'},
+  {ch:34, stage:8001, title:'제32장 — 행상의 전설',         txt:'어느 세계의 신화에나 같은 이야기가 있다.<br>"틈새에서 수레를 끌고 온 자가 불과 소금과 이야기를 팔았다."<br>균열은 재앙으로 기록된 적이 없었다. 늘 <b>장날</b>이었다.'},
+  {ch:35, stage:8501, title:'제33장 — 낙원의 점포',         txt:'낙원이 제안했다. 손님이 없어도 되는 가게를 주겠노라고.<br>영원히 닫지 않아도 되고, 영원히 열지 않아도 되는.<br>당신은 정중히 사양했다. 그건 가게가 아니다.'},
+  {ch:36, stage:9001, title:'제34장 — 빈 선반',            txt:'균열 저편에는 아무것도 놓이지 않은 선반이 끝없이 이어진다.<br>아직 만들어지지 않은 세계들의 자리.<br>바깥의 손님이 무엇을 두려워하는지 알 것 같았다.'},
+  {ch:37, stage:9501, title:'제35장 — 마지막 흥정',         txt:'손님이 처음으로 속내를 말했다.<br>"바깥에는 바꿀 것이 없소. 바꿀 상대도 없소."<br>균열을 사려던 이유는 닫기 위해서가 아니었다. <b>혼자가 아니고 싶어서</b>였다.'},
+  {ch:38, stage:9901, title:'제36장 — 임대',               txt:'당신은 균열을 팔지 않았다. 대신 빈 선반 하나를 세놓았다.<br>손님은 서툰 글씨로 간판을 썼다. 바깥의 첫 번째 가게.<br>예언은 틀리지 않았다. 팔린 것이 "가게"가 아니라 <b>자리</b>였을 뿐.'},
+  {ch:39, stage:10000,title:'종장 — 영업 중',              txt:'신기의 바늘을 들고 찢어진 하늘 앞에 섰다. 그리고 내려놓았다.<br>찢어진 자리는 상처가 아니었다. <b>진열창</b>이었다.<br>당신은 그 위에 팻말을 건다.<br><br>— <span class="gP">"영업 중. 내일도 엽니다."</span>'},
 ];
+window.RIFT_STORY = RIFT_STORY;
 function readStory(ch){
   const s = RIFT_STORY.find(x=>x.ch===ch); if(!s) return;
   if((S.maxStage||1) < s.stage){ log('<span class="r">스테이지 '+s.stage+' 도달 시 해금됩니다.</span>'); return; }
@@ -14370,7 +14778,7 @@ function craftItem(id){
     if(S.equips.length >= invCap){ log('<span class="r">인벤토리가 가득 찼습니다! 정리 후 제작하세요.</span>'); return; }
     S.gold-=r.gold; S.stones-=r.stones; S.shards-=r.shards;
     const gm = Math.pow(2.4, GRADES.indexOf(r.grade));
-    const base = Math.round(10*Math.pow(1.18,(S.stage-1))*gm*r.mul);
+    const base = Math.round(10*Math.pow(1.18,(effStage(S.stage)-1))*gm*r.mul);
     const it = {id:S.nextId++, type:r.type, grade:r.grade, name:r.name, base, enh:0, opts:rollEquipOpts(r.grade)};
     S.equips.push(it); S.ext.codexOwned[r.name]=true; if(r.type==='weapon') collAdd(r.name);
     S.ext.craftCount++;
@@ -14789,7 +15197,7 @@ function ensureX2(){
   if(!e.cal) e.cal={days:0,last:'',claimed:{}};
   if(!e.jobNoti) e.jobNoti={};
   // 출석일 카운트
-  const today=new Date().toDateString();
+  const today=riftToday();
   if(e.cal.last!==today){ e.cal.last=today; e.cal.days=(e.cal.days||0)+1; }
   return true;
 }
@@ -14976,7 +15384,7 @@ const DAY_DGN=[
   {n:'수요일 조각 균열', d:'균열의 조각'},{n:'목요일 룬 유적', d:'랜덤 룬 2개'},{n:'금요일 재료 창고', d:'펫 재료'},{n:'토요일 경험의 방', d:'경험치 대량'}];
 function enterDayDgn(){
   ensureX2();
-  const today=new Date().toDateString();
+  const today=riftToday();
   if(S.x2.dailyDgn.last===today){ log('<span class="y">오늘의 요일 던전은 이미 클리어했습니다.</span>'); return; }
   S.x2.dailyDgn.last=today;
   const d=new Date().getDay();
@@ -15000,7 +15408,7 @@ window.enterDayDgn=enterDayDgn;
 function renderDayDgn(){
   if(!E$('x2DgnBox')) return;
   const d=new Date().getDay(); const info=DAY_DGN[d];
-  const done=S.x2.dailyDgn.last===new Date().toDateString();
+  const done=S.x2.dailyDgn.last===riftToday();
   E$('x2DgnTxt').textContent='(하루 1회)';
   E$('x2DgnBox').innerHTML='<div class="row"><div class="info">🗓️ 오늘: <b>'+info.n+'</b><small>보상: '+info.d+'</small></div>'
     +'<button '+(done?'disabled':'')+' onclick="enterDayDgn()">'+(done?'클리어✓':'입장')+'</button></div>';
@@ -15077,7 +15485,7 @@ function renderAuto(){
 }
 setInterval(function(){ try{
   if(!ensureX2()) return;
-  if(document.hidden) return;   // 🛡️ 백그라운드 탭에서는 오토 정지 (탭 전환 버그 방지)
+  // (v2) 가려진 탭에서도 전투가 계속 돌아가므로 오토도 멈추지 않는다
   if(S.x2.auto.skill && typeof currentSkills==='function'){
     const now=Date.now();
     for(const s of currentSkills()){
@@ -15240,7 +15648,7 @@ const boot2=setInterval(function(){
 (function(){
 'use strict';
 function E$(id){ return document.getElementById(id); }
-function todayStr(){ return new Date().toDateString(); }
+function todayStr(){ return riftToday(); }
 function hashStr(s){ let h=0; for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0; return h; }
 
 function x3(){
@@ -15842,7 +16250,7 @@ document.addEventListener('click', function(ev){
 (function(){
 'use strict';
 function E$(id){ return document.getElementById(id); }
-function todayStr(){ return new Date().toDateString(); }
+function todayStr(){ return riftToday(); }
 function x4(){
   if(typeof S==='undefined'||!S) return null;
   if(!S.x4) S.x4={};
@@ -16029,7 +16437,7 @@ function buyDeal(){
 }
 function bankAccrued(){
   const e=x4(); if(!e||!e.bank.amount) return 0;
-  const hrs=Math.min(48,(Date.now()-e.bank.since)/3600000);
+  const hrs=Math.max(0,Math.min(48,(Date.now()-e.bank.since)/3600000));
   return Math.floor(e.bank.amount*0.01*hrs);
 }
 function bankDeposit(){
@@ -17166,6 +17574,877 @@ const bootTut=setInterval(function(){
 
 <script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 <script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79"}' crossorigin="anonymous"></script>
+<script>
+/* ================================================================
+   🧰 확장팩 9탄 (v2)
+     ① 강화 수량 지정      ② 탭을 바꿔도 끊기지 않는 오토
+     ③ 보스 패턴           ④ 스토리 자동 등장
+     ⑤ 무기·방어구 제작소  ⑥ 기능 찾기 / 전체 메뉴
+     ⑦ 밝은·어두운 화면    ⑧ 꼼수 차단 마무리
+   ================================================================ */
+(function(){
+'use strict';
+function G(id){ return document.getElementById(id); }
+function ok(){ return typeof S !== 'undefined' && S && S.settings; }
+function v2(){
+  if(!S.v2) S.v2 = {};
+  var e = S.v2;
+  if(e.upAmt == null) e.upAmt = 1;
+  if(!e.storySeen) e.storySeen = {};
+  if(e.storyPopup == null) e.storyPopup = true;
+  if(e.bossPat == null) e.bossPat = true;
+  return e;
+}
+function toast(msg, kind, dur){ try{ if(typeof showToast === 'function') showToast(msg, kind, dur); }catch(e){} }
+function hidden(){ return document.hidden === true; }
+
+/* ════════════════════════════════════════════════════════════════
+   ① 강화 수량 지정 — 숫자를 정하면 버튼 한 번에 그만큼 강화
+   ════════════════════════════════════════════════════════════════ */
+var UP_MAX = 100000;
+function upBase(kind){ return kind === 'atk' ? 15 : kind === 'def' ? 12 : 20; }
+function upLv(kind){ return kind === 'atk' ? S.atkLv : kind === 'def' ? S.defLv : S.critLv; }
+function upWant(){
+  var a = v2().upAmt;
+  if(a === 'max') return Infinity;
+  a = Math.floor(Number(a));
+  return (a >= 1 && isFinite(a)) ? Math.min(UP_MAX, a) : 1;
+}
+// 지금 골드로 want 회 중 몇 회까지 살 수 있는지, 총 얼마인지
+function upPlan(kind, want){
+  var lv = upLv(kind), gold = S.gold, base = upBase(kind), n = 0, cost = 0;
+  var cap = Math.min(want, UP_MAX);
+  while(n < cap){
+    var c = BAL.upCost(base, lv + n);
+    if(!isFinite(c) || cost + c > gold) break;
+    cost += c; n++;
+  }
+  return { n:n, cost:cost, one:BAL.upCost(base, lv) };
+}
+function upMulti(kind){
+  if(!ok()) return;
+  var want = upWant(), plan = upPlan(kind, want);
+  if(plan.n <= 0){ log('<span class="r">골드가 부족합니다.</span>'); return; }
+  // 기존 upStat(축복권 등 부가 효과 포함)을 그대로 쓰되, 매번 저장·다시그리기는 건너뛰고 마지막에 한 번만
+  var _save = saveGame, _rs = renderStats, done = 0;
+  saveGame = function(){}; renderStats = function(){};
+  try{ for(var i = 0; i < plan.n; i++){ if(!upStat(kind)) break; done++; } }
+  finally{ saveGame = _save; renderStats = _rs; }
+  var nm = kind === 'atk' ? '공격력' : kind === 'def' ? '방어력' : '치명타';
+  if(done > 1) log('<span class="c">⬆ ' + nm + ' 강화 +' + done + '회</span> <span style="color:var(--mut)">(-' + fmt(plan.cost) + 'G)</span>');
+  renderStats(); saveGame(true);
+}
+function setUpAmt(a){
+  var e = v2();
+  if(a === 'max') e.upAmt = 'max';
+  else { a = Math.floor(Number(a)); e.upAmt = (a >= 1 && isFinite(a)) ? Math.min(UP_MAX, a) : 1; }
+  var inp = G('upAmt'); if(inp && document.activeElement !== inp) inp.value = e.upAmt === 'max' ? '' : e.upAmt;
+  paintUp();
+}
+function paintUp(){
+  if(!ok() || !G('upAmtRow')) return;
+  var e = v2(), want = upWant();
+  var btns = G('upAmtRow').querySelectorAll('button[data-amt]');
+  for(var i = 0; i < btns.length; i++){
+    var a = btns[i].getAttribute('data-amt');
+    btns[i].classList.toggle('on', String(e.upAmt) === a);
+  }
+  var inp = G('upAmt');
+  if(inp && document.activeElement !== inp){ inp.value = e.upAmt === 'max' ? '' : e.upAmt; inp.placeholder = e.upAmt === 'max' ? '최대' : '직접 입력'; }
+  [['atk','upAtk'],['def','upDef'],['crit','upCrit']].forEach(function(p){
+    var b = G(p[1]); if(!b) return;
+    var plan = upPlan(p[0], want);
+    if(plan.n <= 0){ b.textContent = fmt(plan.one) + ' G'; b.disabled = true; return; }
+    b.disabled = false;
+    var cnt = (want === Infinity) ? ('최대 +' + plan.n) : (plan.n < want ? ('+' + plan.n + '/' + want) : ('+' + plan.n));
+    b.textContent = (want === 1) ? (fmt(plan.cost) + ' G') : (cnt + ' · ' + fmt(plan.cost) + ' G');
+  });
+}
+function bootUp(){
+  var row = G('upAmtRow'); if(!row) return;
+  row.addEventListener('click', function(ev){
+    var b = ev.target.closest('button[data-amt]'); if(!b) return;
+    var a = b.getAttribute('data-amt'); setUpAmt(a === 'max' ? 'max' : Number(a)); saveGame(true);
+  });
+  var inp = G('upAmt');
+  if(inp){
+    inp.addEventListener('input', function(){ if(inp.value !== '') setUpAmt(Number(inp.value)); });
+    inp.addEventListener('change', function(){ saveGame(true); });
+  }
+  G('upAtk').onclick  = function(){ upMulti('atk'); };
+  G('upDef').onclick  = function(){ upMulti('def'); };
+  G('upCrit').onclick = function(){ upMulti('crit'); };
+  // renderStats 가 버튼 글자를 1회 기준으로 다시 쓰므로, 그 직후에 수량 기준으로 덮어쓴다
+  var _rs = renderStats;
+  renderStats = function(){ var r = _rs.apply(this, arguments); try{ paintUp(); }catch(e){} return r; };
+  paintUp();
+}
+
+/* ════════════════════════════════════════════════════════════════
+   ② 탭을 바꾸거나 자리를 비워도 오토 유지
+      - 화면이 가려지면 브라우저가 그리기 루프를 멈춰서 전투가 서던 문제.
+      - 가려진 동안은 별도 타이머(워커)로 전투 계산만 계속 돌린다(그리기·소리 없음).
+      - 브라우저가 탭을 완전히 재워 버린 시간은 돌아왔을 때 오프라인 보상으로 정산.
+   ════════════════════════════════════════════════════════════════ */
+var BG = { lastWall:Date.now(), lastPerf:performance.now(), acc:0, away:0, awayGold:0, running:false, worker:null, inner:null };
+var SIM_STEP = 200, SIM_MAX = 30000;
+function bgAuto(){
+  // 가려진 동안에도 돌아가야 하는 자동 기능 (원래는 1.5초 타이머 — 백그라운드에선 브라우저가 늦춤)
+  try{
+    var e = S.x5;
+    if(e && e.autoBossOwned && e.autoBossOn && battleMode === 'field' && !(mob && mob.isBoss) &&
+       (S.kills || 0) >= BAL.killsForBoss && typeof tryBoss === 'function') tryBoss();
+  }catch(err){}
+  try{
+    var a = S.x2 && S.x2.auto;
+    if(a && a.skill && typeof currentSkills === 'function'){
+      var now = Date.now(), list = currentSkills();
+      for(var i = 0; i < list.length; i++){
+        if(now >= ((S.skillCd && S.skillCd[list[i].id]) || 0)){ useSkill(list[i].id); break; }
+      }
+    }
+    if(a && a.potion && Date.now() > (S.potionUntil || 0) && typeof buyPotion === 'function') buyPotion();
+  }catch(err){}
+}
+function trimFx(){
+  try{ dmgNums.length = 0; parts.length = 0; slashes.length = 0; }catch(e){}
+}
+function capFx(){
+  // 한꺼번에 따라잡은 뒤 연출 효과가 수백 개씩 남지 않게 최근 것만 둔다
+  try{ if(parts.length > 80) parts.splice(0, parts.length - 80); if(slashes.length > 20) slashes.splice(0, slashes.length - 20); }catch(e){}
+}
+function grantAway(sec){
+  if(!(sec >= 5) || typeof calcOffline !== 'function') return;
+  try{
+    var r = calcOffline(sec);
+    if(!r || !(r.gold > 0)) return;
+    S.gold += r.gold; gainExp(r.exp);
+    BG.away += r.sec; BG.awayGold += r.gold;
+  }catch(e){}
+}
+function flushAway(){
+  if(hidden() || !(BG.away >= 20)){ if(!hidden()){ BG.away = 0; BG.awayGold = 0; } return; }
+  log('<span class="g">⏰ 브라우저가 멈춰 있던 ' + fmtDur(BG.away) + ' 동안의 보상 +' + fmt(BG.awayGold) + 'G</span>');
+  toast('⏰ 자리 비운 ' + fmtDur(BG.away) + ' 정산<br><span style="font-size:12px">골드 +' + fmt(BG.awayGold) + '</span>', 'ok', 4500);
+  BG.away = 0; BG.awayGold = 0;
+}
+// 밀린 구간 [fromT, toT] (performance.now 기준) 을 0.2초 단위로 실제 계산
+function simulate(fromT, toT){
+  BG.running = true;
+  window.__riftSimulating = true;      // 따라잡는 동안엔 효과음을 내지 않는다 (한꺼번에 터지는 소리 방지)
+  try{
+    lastTick = fromT;
+    var t = fromT;
+    while(t < toT){
+      t = Math.min(toT, t + SIM_STEP);
+      BG.inner(t);
+      BG.acc += SIM_STEP;
+      if(BG.acc >= 1400){ BG.acc = 0; bgAuto(); }
+    }
+  }catch(e){ }
+  finally{ BG.running = false; window.__riftSimulating = false; }
+}
+function bgBeat(){
+  if(!ok()) return;
+  // 화면이 가려졌거나, 보이는데도 그리기 루프가 0.6초 넘게 안 돌았으면 여기서 전투를 굴린다
+  if(hidden() || performance.now() - lastTick > 600) combatTick(performance.now());
+}
+function bootBg(){
+  // 전투 계산을 "밀린 시간 따라잡기"가 되도록 감싼다.
+  //   원래는 한 번 호출에 최대 0.2초만 계산해서, 그리기 루프가 멈추면 전투도 같이 멈췄다.
+  BG.inner = combatTick;
+  combatTick = function(now){
+    if(BG.running || window.PVP_ON || !ok()) return BG.inner.apply(this, arguments);
+    var wall = Date.now(), pnow = performance.now();
+    var slept = (wall - BG.lastWall) - (pnow - BG.lastPerf);     // 컴퓨터 절전처럼 타이머 시계가 못 본 시간
+    BG.lastWall = wall; BG.lastPerf = pnow;
+    if(slept > 5000) grantAway(Math.min(slept, 86400000 * 3) / 1000);
+    var gap = now - lastTick;
+    if(!(gap > 210)){ var r0 = BG.inner.apply(this, arguments); if(slept > 5000) flushAway(); return r0; }
+    var sim = Math.min(gap, SIM_MAX), rest = gap - sim;
+    simulate(now - sim, now);
+    if(hidden()) trimFx(); else capFx();
+    if(rest > 5000) grantAway(rest / 1000);
+    flushAway();
+  };
+  // 워커 타이머: 가려진 탭에서도 느려지지 않는다
+  try{
+    var src = 'setInterval(function(){postMessage(1)},250);';
+    var w = new Worker(URL.createObjectURL(new Blob([src], {type:'text/javascript'})));
+    w.onmessage = bgBeat; BG.worker = w;
+  }catch(e){}
+  setInterval(bgBeat, 1000);   // 워커를 못 쓰는 환경용 예비 (느려져도 밀린 만큼 한꺼번에 계산)
+  document.addEventListener('visibilitychange', function(){
+    if(hidden()){ BG.acc = 0; return; }
+    try{ combatTick(performance.now()); }catch(e){}
+    flushAway();
+    try{ renderAll(); }catch(e){}
+    try{ saveGame(true); }catch(e){}
+  });
+  // 가려진 동안 알림이 쌓이지 않게
+  if(typeof window.showToast === 'function'){
+    var _toast = window.showToast;
+    window.showToast = function(){
+      if(hidden()) return document.createElement('div');
+      return _toast.apply(this, arguments);
+    };
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   ③ 보스 패턴 — 보스마다 행동 패턴이 붙는다 (스테이지에 따라 고정)
+      약점 / 방어 태세 / 속성 전환 / 강타 / 재생 / 광폭
+      버틸 화력이 있으면 자동으로도 끊기고, 스킬을 맞춰 쓰면 더 유리하다.
+   ════════════════════════════════════════════════════════════════ */
+var PAT = {
+  weak:  { icon:'🎯', name:'약점' },
+  guard: { icon:'🛡', name:'방어 태세' },
+  shift: { icon:'🔄', name:'속성 전환' },
+  charge:{ icon:'⚠', name:'강타' },
+  regen: { icon:'💚', name:'재생' },
+  rage:  { icon:'😡', name:'광폭' }
+};
+var PAT_ORDER = ['weak','guard','shift','charge','weak','regen','guard','rage','charge','regen'];
+function patsFor(stage){
+  if(stage < 3) return [];
+  if(stage < 6) return ['weak'];
+  var a = PAT_ORDER[(stage - 1) % 10], list = [a];
+  if(stage >= 100){
+    var b = PAT_ORDER[(stage * 3 + 4) % 10];
+    if(b !== a) list.push(b);
+  }
+  return list;
+}
+function bossActive(){
+  return typeof mob !== 'undefined' && mob && mob.isBoss && mob.bp && mob.hp > 0 &&
+         !mob.tower && !mob.sandbag && battleMode === 'field' && !window.PVP_ON;
+}
+function has(p){ return mob.bp.list.indexOf(p) >= 0; }
+function assignPatterns(){
+  if(!ok() || !v2().bossPat) return;
+  if(!mob || !mob.isBoss || mob.tower || mob.sandbag || battleMode !== 'field' || window.PVP_ON) return;
+  var list = patsFor(S.stage);
+  if(!list.length) return;
+  mob.bp = { list:list, t:0, dmgWin:0, charging:0, stun:0, regen:0, regenDone:0, raged:false, shiftT:0, baseAtk:mob.atk, note:'' };
+  log('<span class="c">' + list.map(function(p){ return PAT[p].icon + ' ' + PAT[p].name; }).join(' · ') + '</span> 패턴 보스!');
+}
+// 지금 보스가 받는 피해 배수
+function bossDmgMul(){
+  var bp = mob.bp, m = 1;
+  if(bp.stun > 0) m *= 1.5;
+  if(has('weak'))  m *= ((bp.t % 7000) >= 4500) ? 1.8 : 0.85;
+  if(has('guard')) m *= ((bp.t % 8000) < 4000) ? 0.4 : 1.6;
+  if(bp.raged) m *= 1.25;
+  return m;
+}
+function bossInterrupt(why){
+  var bp = mob.bp;
+  if(bp.charging > 0){
+    bp.charging = 0; bp.stun = 2000; bp.dmgWin = 0;
+    log('<span class="g">💥 강타 저지! 보스 기절 — 2초간 받는 피해 1.5배</span>' + (why ? ' <span style="color:var(--mut)">(' + why + ')</span>' : ''));
+    try{ if(S.settings.shake) bgShake = Math.max(bgShake, 6); mFlash = 1; }catch(e){}
+  }
+  if(bp.regen > 0){
+    bp.regen = 0; bp.dmgWin = 0;
+    log('<span class="g">✂ 재생 저지!</span>' + (why ? ' <span style="color:var(--mut)">(' + why + ')</span>' : ''));
+  }
+}
+function bossTick(dt){
+  if(!bossActive()) return;
+  var bp = mob.bp;
+  bp.t += dt;
+  if(bp.stun > 0){
+    bp.stun -= dt;
+    try{ tM = 0; }catch(e){}            // 기절 중엔 보스가 공격하지 못함
+  }
+  // 강타: 9초 주기, 5.5초부터 2.5초간 힘을 모음
+  if(has('charge') && bp.stun <= 0){
+    var ph = bp.t % 9000;
+    if(bp.charging <= 0 && ph >= 5500 && ph < 5500 + dt + 1 && bp.regen <= 0){
+      bp.charging = 2500; bp.dmgWin = 0;
+      if(!hidden()) log('<span class="r">⚠ 보스가 힘을 모읍니다! 스킬을 쓰거나 화력으로 끊으세요</span>');
+    } else if(bp.charging > 0){
+      bp.charging -= dt;
+      if(bp.dmgWin >= mob.maxHp * 0.05) bossInterrupt('화력');
+      else if(bp.charging <= 0){
+        bp.charging = 0;
+        var pm = playerMaxHP(), d = pm * 0.25;
+        pHpCur = Math.max(1, pHpCur - d);
+        try{ addDmgNum(d, 'player', false); pFlash = 1; mLunge = 1; if(S.settings.shake) bgShake = Math.max(bgShake, 9); flashT = Math.max(flashT, 0.5); }catch(e){}
+        log('<span class="r">💢 강타! 최대 체력의 25% 피해</span>');
+      }
+    }
+  }
+  // 재생: 체력 60% / 30% 에서 한 번씩, 3초간 시전
+  if(has('regen') && bp.charging <= 0){
+    var ratio = mob.hp / mob.maxHp;
+    if(bp.regen <= 0 && ((bp.regenDone === 0 && ratio <= 0.6) || (bp.regenDone === 1 && ratio <= 0.3))){
+      bp.regenDone++; bp.regen = 3000; bp.dmgWin = 0;
+      if(!hidden()) log('<span class="r">💚 보스가 재생을 시작합니다! 3초 안에 끊으세요</span>');
+    } else if(bp.regen > 0){
+      bp.regen -= dt;
+      if(bp.dmgWin >= mob.maxHp * 0.06) bossInterrupt('화력');
+      else if(bp.regen <= 0){
+        bp.regen = 0;
+        var heal = mob.maxHp * 0.10;
+        mob.hp = Math.min(mob.maxHp, mob.hp + heal);
+        log('<span class="r">💚 보스 재생! 체력 10% 회복</span>');
+      }
+    }
+  }
+  // 광폭: 체력 30% 이하
+  if(has('rage') && !bp.raged && mob.hp / mob.maxHp <= 0.3){
+    bp.raged = true; mob.atk *= 1.4;
+    log('<span class="r">😡 광폭화! 보스 공격력 +40% · 대신 받는 피해 +25%</span>');
+    try{ if(S.settings.shake) bgShake = Math.max(bgShake, 7); }catch(e){}
+  }
+  // 속성 전환: 5초마다
+  if(has('shift')){
+    bp.shiftT += dt;
+    if(bp.shiftT >= 5000){
+      bp.shiftT = 0;
+      try{
+        var i = ELEM_KEYS.indexOf(mob.el);
+        mob.el = ELEM_KEYS[(i + 1 + ELEM_KEYS.length) % ELEM_KEYS.length];
+      }catch(e){}
+    }
+  }
+}
+function bossBanner(){
+  var el = G('bossPatBar'); if(!el) return;
+  if(!bossActive()){ if(el.style.display !== 'none'){ el.style.display = 'none'; el.textContent = ''; } return; }
+  var bp = mob.bp, parts2 = [], hot = false;
+  if(bp.stun > 0){ parts2.push('💫 기절! 피해 1.5배 ' + (bp.stun / 1000).toFixed(1) + 's'); hot = true; }
+  if(bp.charging > 0){ parts2.push('⚠ 강타 준비 ' + (bp.charging / 1000).toFixed(1) + 's — 스킬로 끊기'); hot = true; }
+  if(bp.regen > 0){ parts2.push('💚 재생 시전 ' + (bp.regen / 1000).toFixed(1) + 's — 스킬로 끊기'); hot = true; }
+  if(has('weak')){
+    var w = bp.t % 7000;
+    if(w >= 4500){ parts2.push('🎯 약점 노출! 피해 1.8배 ' + ((7000 - w) / 1000).toFixed(1) + 's'); hot = true; }
+    else parts2.push('🎯 약점까지 ' + ((4500 - w) / 1000).toFixed(1) + 's');
+  }
+  if(has('guard')){
+    var g = bp.t % 8000;
+    if(g < 4000) parts2.push('🛡 방어 태세(피해 0.4배) ' + ((4000 - g) / 1000).toFixed(1) + 's');
+    else { parts2.push('🔓 빈틈! 피해 1.6배 ' + ((8000 - g) / 1000).toFixed(1) + 's'); hot = true; }
+  }
+  if(has('shift')){ var ic = (typeof ELEMS !== 'undefined' && ELEMS[mob.el]) || '❔'; parts2.push('🔄 속성 ' + ic + ' ' + (mob.el || '무') + ' (' + ((5000 - bp.shiftT) / 1000).toFixed(0) + 's 뒤 전환)'); }
+  if(has('rage')) parts2.push(bp.raged ? '😡 광폭 중' : '😡 체력 30% 이하에서 광폭');
+  if(has('charge') && bp.charging <= 0 && bp.stun <= 0) parts2.push('⚠ 강타 예정');
+  if(has('regen') && bp.regen <= 0 && bp.regenDone < 2) parts2.push('💚 재생 ' + (2 - bp.regenDone) + '회 남음');
+  var txt = parts2.join('  ·  ');
+  if(el.textContent !== txt) el.textContent = txt;
+  el.className = hot ? 'hot' : '';
+  if(el.style.display !== 'block') el.style.display = 'block';
+}
+function bootBoss(){
+  var _spawn = spawnMob;
+  spawnMob = function(isBoss){
+    var r = _spawn.apply(this, arguments);
+    try{ if(isBoss) assignPatterns(); }catch(e){}
+    return r;
+  };
+  var _hit = hitMob;
+  hitMob = function(dmg, crit, byPet){
+    try{
+      if(bossActive() && isFinite(dmg)){
+        dmg = dmg * bossDmgMul();
+        if(mob.bp.charging > 0 || mob.bp.regen > 0) mob.bp.dmgWin += dmg;
+      }
+    }catch(e){}
+    return _hit.call(this, dmg, crit, byPet);
+  };
+  var _ct = combatTick, last = performance.now();
+  combatTick = function(now){
+    var dt = Math.min(200, Math.max(0, now - last)); last = now;
+    try{ if(typeof isVIP === 'function' && isVIP() && S.battleSpeed > 1) dt *= S.battleSpeed; }catch(e){}
+    var r = _ct.apply(this, arguments);
+    try{ bossTick(dt); }catch(e){}
+    return r;
+  };
+  var _skill = useSkill;
+  useSkill = function(id){
+    var before = (S.skillCd && S.skillCd[id]) || 0;
+    var r = _skill.apply(this, arguments);
+    try{
+      var after = (S.skillCd && S.skillCd[id]) || 0;
+      if(after > before && bossActive()) bossInterrupt('스킬');
+    }catch(e){}
+    return r;
+  };
+  try{ window.useSkill = useSkill; }catch(e){}
+  var _bars = renderHpBars;
+  renderHpBars = function(){ var r = _bars.apply(this, arguments); try{ bossBanner(); }catch(e){} return r; };
+}
+
+/* ════════════════════════════════════════════════════════════════
+   ④ 스토리 — 새 구간에 처음 닿으면 장면이 자동으로 뜬다
+   ════════════════════════════════════════════════════════════════ */
+function storyList(){ return window.RIFT_STORY || []; }
+function storyTick(){
+  if(!ok() || !S.ext || !S.ext.storyRead || typeof window.readStory !== 'function') return;
+  var e = v2(), list = storyList(), mx = S.maxStage || 1, i, s;
+  if(!e.storyInit){
+    // 업데이트 전에 이미 지나온 구간은 한꺼번에 띄우지 않고, 목록에서 읽을 수 있다고만 알림
+    var pending = 0;
+    for(i = 0; i < list.length; i++){ s = list[i]; if(mx >= s.stage){ e.storySeen[s.ch] = true; if(!S.ext.storyRead[s.ch]) pending++; } }
+    e.storyInit = true;
+    if(pending > 0 && mx > 1){
+      toast('📖 읽지 않은 이야기 ' + pending + '편<br><span style="font-size:12px">🔍 찾기 → "스토리" 에서 읽으면 조각을 받아요</span>', 'info', 6000);
+    }
+    return;
+  }
+  if(!e.storyPopup || hidden()) return;
+  var bg = G('modalBg'); if(bg && bg.style.display === 'flex') return;
+  if(window.PVP_ON) return;
+  for(i = 0; i < list.length; i++){
+    s = list[i];
+    if(mx >= s.stage && !e.storySeen[s.ch]){
+      e.storySeen[s.ch] = true;
+      if(!S.ext.storyRead[s.ch]) window.readStory(s.ch);
+      return;
+    }
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   ⑤ 제작소 — 거의 모든 무기·방어구를 골라서 제작 (개발자 장비 제외)
+   ════════════════════════════════════════════════════════════════ */
+var CR = { type:'weapon', grade:2, el:'', q:'', limit:40 };
+var CR_STAGE  = [1, 1, 1, 15, 30, 70, 150, 300, 600, 1000, 2000, 3000];        // 등급별 필요 최고 스테이지
+var CR_STONE  = [2, 5, 10, 20, 40, 120, 300, 700, 1500, 3000, 6000, 12000];    // 강화석
+var CR_SHARD  = [0, 0, 0, 5, 15, 50, 120, 300, 700, 1500, 3000, 6000];         // 균열의 조각
+var CR_MAT    = [3, 5, 8, 12, 20, 30, 45, 60, 80, 100, 130, 160];              // 몬스터 재료
+function crPool(){ return CR.type === 'weapon' ? WEAPON_BASE : ARMOR_BASE; }
+function crMats(){
+  if(crMats._c) return crMats._c;
+  var seen = {}, out = [];
+  for(var i = 0; i < WORLDS.length; i++){ var m = WORLDS[i].mat; if(m && !seen[m]){ seen[m] = WORLDS[i].name; out.push({mat:m, world:WORLDS[i].name}); } }
+  return (crMats._c = out);
+}
+function crMatFor(idx){ var m = crMats(); return m[idx % m.length]; }
+// 드랍과 같은 규칙: 스테이지가 오를수록 목록 뒤쪽(상위) 장비가 열린다
+function crUnlockedCount(pool){
+  var mx = S.maxStage || 1;
+  return Math.max(6, Math.min(pool.length, Math.floor(pool.length * (0.12 + mx / 100 * 0.88))));
+}
+function crUnlockStage(idx, pool){
+  return Math.max(1, Math.ceil(((idx + 1) / pool.length - 0.12) / 0.88 * 100));
+}
+function crBase(type, gi){
+  return Math.round((type === 'weapon' ? 8 : 5) * Math.pow(1.18, effStage(S.stage) - 1) * Math.pow(2.4, gi));
+}
+function crCost(type, gi, el){
+  var base = crBase(type, gi);
+  return { base:base, gold:Math.round(base * 12), stones:CR_STONE[gi], shards:CR_SHARD[gi] + (el ? 3 : 0), mats:CR_MAT[gi] };
+}
+function crCheck(idx){
+  var pool = crPool(), gi = CR.grade, name = pool[idx];
+  if(!name) return {ok:false, why:'없는 장비'};
+  if(/개발자|DEV/i.test(name)) return {ok:false, why:'제작 불가'};
+  if(idx >= crUnlockedCount(pool)) return {ok:false, why:'스테이지 ' + crUnlockStage(idx, pool) + ' 도달 시 해금', lock:true};
+  if((S.maxStage || 1) < CR_STAGE[gi]) return {ok:false, why:GRADE_KO[GRADES[gi]] + ' 등급은 스테이지 ' + CR_STAGE[gi] + ' 도달 후', lock:true};
+  var c = crCost(CR.type, gi, CR.el), m = crMatFor(idx);
+  if(S.gold < c.gold) return {ok:false, why:'골드 부족'};
+  if((S.stones || 0) < c.stones) return {ok:false, why:'강화석 부족'};
+  if((S.shards || 0) < c.shards) return {ok:false, why:'조각 부족'};
+  if(((S.inv && S.inv[m.mat]) || 0) < c.mats) return {ok:false, why:m.mat + ' 부족'};
+  if(S.equips.length >= (S.invCap || 30)) return {ok:false, why:'인벤토리 가득'};
+  return {ok:true};
+}
+function craftGear(idx){
+  if(!ok()) return;
+  var chk = crCheck(idx);
+  if(!chk.ok){ log('<span class="r">제작 불가: ' + chk.why + '</span>'); return; }
+  var pool = crPool(), gi = CR.grade, grade = GRADES[gi], name = pool[idx];
+  var c = crCost(CR.type, gi, CR.el), m = crMatFor(idx);
+  S.gold -= c.gold; S.stones -= c.stones; S.shards -= c.shards; S.inv[m.mat] -= c.mats;
+  var it = { id:S.nextId++, type:CR.type, grade:grade, name:name, base:c.base, enh:0, opts:rollEquipOpts(grade) };
+  if(CR.type === 'weapon' && CR.el) it.el = CR.el;
+  S.equips.push(it);
+  try{ if(CR.type === 'weapon') collAdd(name); }catch(e){}
+  try{ if(S.ext){ if(S.ext.codexOwned) S.ext.codexOwned[name] = true; S.ext.craftCount = (S.ext.craftCount || 0) + 1; } }catch(e){}
+  log('<span class="g">⚒️ <span class="' + (GRADE_CLS[grade] || '') + '">[' + GRADE_KO[grade] + '] ' + GRADE_PFX[grade] + ' ' + name + '</span> 제작 완료!</span>');
+  try{ sfx('buy'); }catch(e){}
+  saveGame(true); renderAll(); renderCraft2();
+}
+function crSet(k, v){
+  if(k === 'type'){ CR.type = v; CR.limit = 40; }
+  else if(k === 'grade'){ CR.grade = Math.max(0, Math.min(GRADES.length - 1, parseInt(v, 10) || 0)); }
+  else if(k === 'el'){ CR.el = v || ''; }
+  else if(k === 'q'){ CR.q = String(v || '').trim(); CR.limit = 40; }
+  else if(k === 'more'){ CR.limit += 60; }
+  renderCraft2(k === 'q');
+}
+function renderCraft2(keepInput){
+  var box = G('v2CraftBox'); if(!box || !ok()) return;
+  var pool = crPool(), gi = CR.grade, grade = GRADES[gi];
+  var c = crCost(CR.type, gi, CR.el), unlocked = crUnlockedCount(pool);
+  // 조작부는 한 번만 만들고(입력 중 글자가 날아가지 않게) 목록만 다시 그린다
+  if(!G('v2CraftList')){
+    var gopts = GRADES.map(function(g, i){ return '<option value="' + i + '">' + GRADE_KO[g] + '</option>'; }).join('');
+    var eopts = '<option value="">속성 없음</option>' + ELEM_KEYS.map(function(k){ return '<option value="' + k + '">' + ELEMS[k] + ' ' + k + ' (조각+3)</option>'; }).join('');
+    box.innerHTML =
+      '<div class="v2CraftCtl">' +
+        '<div class="v2Seg"><button data-crtype="weapon">🗡 무기</button><button data-crtype="armor">🛡 방어구</button></div>' +
+        '<select id="v2CrGrade" title="제작 등급">' + gopts + '</select>' +
+        '<select id="v2CrEl" title="무기 속성">' + eopts + '</select>' +
+        '<input id="v2CrQ" type="search" placeholder="이름 검색 (예: 검, 활, 지팡이)" autocomplete="off">' +
+      '</div>' +
+      '<div id="v2CraftCost" class="notice" style="margin:6px 0;"></div>' +
+      '<div id="v2CraftList"></div>';
+    box.addEventListener('click', function(ev){
+      var t = ev.target.closest('[data-crtype]'); if(t){ crSet('type', t.getAttribute('data-crtype')); return; }
+      var b = ev.target.closest('[data-craft]'); if(b){ craftGear(parseInt(b.getAttribute('data-craft'), 10)); return; }
+      if(ev.target.closest('[data-crmore]')) crSet('more');
+    });
+    G('v2CrGrade').addEventListener('change', function(){ crSet('grade', this.value); });
+    G('v2CrEl').addEventListener('change', function(){ crSet('el', this.value); });
+    G('v2CrQ').addEventListener('input', function(){ crSet('q', this.value); });
+  }
+  G('v2CrGrade').value = String(gi);
+  G('v2CrEl').value = CR.el; G('v2CrEl').style.display = CR.type === 'weapon' ? '' : 'none';
+  var segs = box.querySelectorAll('[data-crtype]');
+  for(var s = 0; s < segs.length; s++) segs[s].classList.toggle('on', segs[s].getAttribute('data-crtype') === CR.type);
+  var gradeOk = (S.maxStage || 1) >= CR_STAGE[gi];
+  G('v2CraftCost').innerHTML =
+    '<b class="' + (GRADE_CLS[grade] || '') + '">' + GRADE_KO[grade] + '</b> 등급 1개 제작비 — ' +
+    '골드 <b>' + fmt(c.gold) + '</b> · 강화석 <b>' + c.stones + '</b>' + (c.shards ? ' · 조각 <b>' + c.shards + '</b>' : '') +
+    ' · 장비별 재료 <b>' + c.mats + '</b>개' +
+    '<br><span style="color:var(--mut)">완성품 ' + (CR.type === 'weapon' ? 'ATK' : 'DEF') + ' 기본값 ' + fmt(c.base) + ' (현재 스테이지 기준) · 보유 강화석 ' + (S.stones || 0) + ' · 조각 ' + (S.shards || 0) +
+    ' · 해금된 ' + (CR.type === 'weapon' ? '무기' : '방어구') + ' ' + unlocked + '/' + pool.length + '종</span>' +
+    (gradeOk ? '' : '<br><span style="color:var(--red)">🔒 ' + GRADE_KO[grade] + ' 등급 제작은 스테이지 ' + CR_STAGE[gi] + ' 도달 후 열립니다</span>');
+  var q = CR.q.replace(/\s+/g, ''), rows = [], shown = 0, total = 0;
+  for(var i = 0; i < pool.length; i++){
+    var name = pool[i];
+    if(/개발자|DEV/i.test(name)) continue;
+    if(q && name.replace(/\s+/g, '').indexOf(q) < 0) continue;
+    total++;
+    if(shown >= CR.limit) continue;
+    shown++;
+    var chk = crCheck(i), m = crMatFor(i), have = (S.inv && S.inv[m.mat]) || 0;
+    var owned = !!(S.coll && S.coll[name]) || !!(S.ext && S.ext.codexOwned && S.ext.codexOwned[name]);
+    rows.push('<div class="row' + (chk.lock ? ' v2Locked' : '') + '"><div class="info">' + (CR.type === 'weapon' ? '🗡' : '🛡') + ' ' +
+      '<span class="' + (GRADE_CLS[grade] || '') + '">' + GRADE_PFX[grade] + ' ' + name + '</span>' + (owned ? ' <span class="v2Tag">도감 ✓</span>' : '') +
+      '<small>재료: ' + m.mat + ' <b style="color:' + (have >= c.mats ? 'var(--green)' : 'var(--red)') + '">' + have + '/' + c.mats + '</b>' +
+      ' <span style="color:var(--mut)">(' + m.world + ' 계열 지역 드랍)</span>' + (chk.ok ? '' : ' · <span style="color:var(--red)">' + chk.why + '</span>') + '</small></div>' +
+      '<button class="gold-btn" data-craft="' + i + '"' + (chk.ok ? '' : ' disabled') + '>' + (chk.lock ? '🔒' : '제작') + '</button></div>');
+  }
+  var more = total > shown ? '<button class="buy" data-crmore="1" style="width:100%;margin-top:6px;">더 보기 (' + shown + '/' + total + ')</button>' : '';
+  G('v2CraftList').innerHTML = rows.length ? rows.join('') + more : '<div style="color:var(--mut);font-size:12px;padding:8px;">검색 결과가 없습니다.</div>';
+}
+function bootCraft(){
+  var host = G('extCraftBox');
+  if(!host || G('v2CraftBox')) return;
+  // 모험+ 탭은 제목(h2)마다 접히는 구조라, 제작소를 독립된 한 칸으로 넣는다 (기존 '제작 공방' 바로 아래)
+  var anchor = host.closest('.extBody') || host;
+  anchor.insertAdjacentHTML('afterend',
+    '<h2 style="margin-top:12px;" id="v2CraftH">⚒️ 장비 제작소 <span style="color:var(--mut);font-size:12px;">(무기 ' + WEAPON_BASE.length + '종 · 방어구 ' + ARMOR_BASE.length + '종)</span></h2>' +
+    '<div class="notice" style="margin-top:0;margin-bottom:6px;">원하는 장비를 <b>이름·등급·속성</b>까지 골라서 만듭니다. 골드·강화석·조각과 장비마다 정해진 몬스터 재료가 듭니다.</div>' +
+    '<div id="v2CraftBox"></div>');
+  // 장비 탭에서 바로 가는 버튼
+  var eq = G('tab-eq');
+  if(eq && !G('v2GoCraft')){
+    eq.insertAdjacentHTML('afterbegin', '<button id="v2GoCraft" class="gold-btn">⚒️ 원하는 장비 직접 만들기 (제작소로 이동)</button>');
+    G('v2GoCraft').onclick = function(){ goItem({ tab:'ext', el:G('v2CraftH') }); };
+  }
+  renderCraft2();
+}
+
+/* ════════════════════════════════════════════════════════════════
+   ⑥ 기능 찾기 — 검색하거나 전체 메뉴에서 눌러 바로 이동
+   ════════════════════════════════════════════════════════════════ */
+var FIND = { items:[], open:false };
+var FIND_ALIAS = {
+  '오토':'자동', '자동사냥':'자동', '제작':'제작', '만들기':'제작', '조합':'합성', '밝게':'화면', '어둡게':'화면', '다크':'화면', '라이트':'화면',
+  '테마':'화면', '색':'테마', '소리':'효과음', '음악':'배경음', '백업':'세이브', '코드':'세이브', '저장':'세이브', '이야기':'스토리', '기록':'스토리',
+  '친구':'친구', '길드':'클랜', '거래':'거래소', '경매':'경매', '뽑기':'가챠', '도박':'주사위', '닉네임':'이름', '이름변경':'이름', '업그레이드':'강화',
+  '랭킹':'랭킹', '순위':'랭킹', '출석':'출석', '미션':'미션', '쿠폰':'쿠폰', '문의':'문의', '언어':'언어', '펫':'펫', '환생':'환생'
+};
+function txtOf(el){
+  var c = el.cloneNode(true), sm = c.querySelectorAll('small, button, input, select, span[id], .secArrow');
+  for(var i = 0; i < sm.length; i++) sm[i].remove();
+  return (c.textContent || '').replace(/\s+/g, ' ').trim();
+}
+function buildIndex(){
+  var items = [], tabs = document.querySelectorAll('.tabs button[data-tab]'), names = {};
+  for(var i = 0; i < tabs.length; i++){
+    var id = tabs[i].getAttribute('data-tab'), nm = tabs[i].textContent.trim();
+    names[id] = nm; items.push({ label:nm, sub:'탭', tab:id, el:null, kind:'tab' });
+  }
+  var pages = document.querySelectorAll('.tabpage');
+  for(var p = 0; p < pages.length; p++){
+    var tid = (pages[p].id || '').replace(/^tab-/, ''), tname = names[tid] || tid;
+    var hs = pages[p].querySelectorAll('h2, h3');
+    for(var h = 0; h < hs.length; h++){
+      var t = txtOf(hs[h]); if(t && t.length <= 40) items.push({ label:t, sub:tname, tab:tid, el:hs[h], kind:'head' });
+    }
+    var rows = pages[p].querySelectorAll('.row > .info');
+    for(var r = 0; r < rows.length && r < 400; r++){
+      if(rows[r].closest('#eqList, #v2CraftList, #extCodexBox, #extAchBox, #petInventory')) continue;
+      var lt = txtOf(rows[r]); if(!lt || lt.length > 36) continue;
+      var sm = rows[r].querySelector('small');
+      items.push({ label:lt, sub:tname, tab:tid, el:rows[r].parentNode, kind:'row', extra:sm ? sm.textContent : '' });
+    }
+  }
+  var extra = [
+    ['🃏 포커', '상단', function(){ if(typeof openPoker === 'function') openPoker(); }],
+    ['🎰 슬롯머신', '상단', function(){ if(typeof openSlotMachine === 'function') openSlotMachine(); }],
+    ['🔁 스테이지 이동 (파밍)', '전투 화면', function(){ if(typeof farmStageJump === 'function') farmStageJump(); }],
+    ['⚔ 보스 도전', '전투 화면', function(){ var b = G('bossBtn'); if(b){ b.scrollIntoView({block:'center'}); flash(b); } }],
+    ['☀️ 밝은 화면 / 🌙 어두운 화면 전환', '화면', function(){ toggleMode(); }]
+  ];
+  for(var x = 0; x < extra.length; x++) items.push({ label:extra[x][0], sub:extra[x][1], run:extra[x][2], kind:'act' });
+  FIND.items = items;
+}
+function flash(el){
+  try{ el.classList.add('v2Hit'); setTimeout(function(){ el.classList.remove('v2Hit'); }, 2200); }catch(e){}
+}
+function goItem(it){
+  closeFinder();
+  if(it.run){ try{ it.run(); }catch(e){} return; }
+  var tb = document.querySelector('.tabs button[data-tab="' + it.tab + '"]');
+  if(tb) tb.click();
+  setTimeout(function(){
+    var el = it.el && document.body.contains(it.el) ? it.el : G('tab-' + it.tab);
+    try{
+      // 접혀 있는 칸이면 먼저 펼친다 (모험+ 탭)
+      if(it.el){
+        var h = it.el.classList && it.el.classList.contains('extSec') ? it.el : null;
+        var body = h ? h._extBody : (it.el.closest ? it.el.closest('.extBody') : null);
+        if(body && body.classList.contains('folded')){ var head = h || body.previousElementSibling; if(head && head.click) head.click(); }
+      }
+    }catch(e){}
+    if(el){ try{ el.scrollIntoView({block: it.el ? 'center' : 'start', behavior:'smooth'}); }catch(e){ el.scrollIntoView(); } if(it.el) flash(el); }
+  }, 60);
+}
+function norm(s){ return String(s || '').toLowerCase().replace(/\s+/g, ''); }
+function findSearch(q){
+  var nq = norm(q); if(!nq) return [];
+  var alt = FIND_ALIAS[nq] ? norm(FIND_ALIAS[nq]) : '';
+  var out = [], rank = {tab:0, act:1, head:2, row:3};
+  for(var i = 0; i < FIND.items.length; i++){
+    var it = FIND.items[i], l = norm(it.label), e = norm(it.extra), sc = -1;
+    if(l.indexOf(nq) === 0) sc = 0; else if(l.indexOf(nq) > 0) sc = 1; else if(alt && l.indexOf(alt) >= 0) sc = 2; else if(e && e.indexOf(nq) >= 0) sc = 3;
+    if(sc >= 0) out.push({it:it, sc:sc * 10 + rank[it.kind]});
+  }
+  out.sort(function(a, b){ return a.sc - b.sc; });
+  return out.slice(0, 40).map(function(o){ return o.it; });
+}
+function renderFinder(q){
+  var res = G('v2FindRes'); if(!res) return;
+  var html = '', i;
+  FIND.cur = [];
+  if(q && q.trim()){
+    var list = findSearch(q);
+    FIND.cur = list;
+    html = list.length ? list.map(function(it, k){
+      return '<button class="v2FindItem" data-fi="' + k + '"><span>' + esc(it.label) + '</span><small>' + esc(it.sub || '') + '</small></button>';
+    }).join('') : '<div class="v2FindEmpty">찾는 기능이 없어요. 다른 단어로 검색해 보세요.</div>';
+  } else {
+    // 전체 메뉴: 탭별로 묶어서 보여줌
+    var groups = {}, order = [];
+    for(i = 0; i < FIND.items.length; i++){
+      var it = FIND.items[i];
+      if(it.kind !== 'head' && it.kind !== 'act') continue;
+      var key = it.sub || '기타';
+      if(!groups[key]){ groups[key] = []; order.push(key); }
+      FIND.cur.push(it); groups[key].push(FIND.cur.length - 1);
+    }
+    html = order.map(function(k){
+      return '<div class="v2FindGroup"><div class="v2FindGName">' + esc(k) + '</div><div class="v2FindChips">' +
+        groups[k].map(function(ix){ return '<button class="v2Chip" data-fi="' + ix + '">' + esc(FIND.cur[ix].label) + '</button>'; }).join('') + '</div></div>';
+    }).join('');
+  }
+  res.innerHTML = html;
+}
+function openFinder(){
+  if(FIND.open) return;
+  buildIndex();
+  var w = G('v2Finder');
+  if(!w){
+    w = document.createElement('div'); w.id = 'v2Finder';
+    w.innerHTML = '<div id="v2FindBox" role="dialog" aria-label="기능 찾기">' +
+      '<div id="v2FindTop"><input id="v2FindQ" type="search" placeholder="🔍 찾을 기능 (예: 제작, 펫, 환생, 세이브, 오토)" autocomplete="off"><button id="v2FindClose" title="닫기">✕</button></div>' +
+      '<div id="v2FindHint">검색하거나 아래 전체 메뉴에서 눌러 바로 이동 · 단축키 <b>/</b> 또는 <b>Ctrl+K</b></div>' +
+      '<div id="v2FindRes"></div></div>';
+    document.body.appendChild(w);
+    w.addEventListener('click', function(ev){
+      if(ev.target === w || ev.target.id === 'v2FindClose'){ closeFinder(); return; }
+      var b = ev.target.closest('[data-fi]');
+      if(b){ var it = FIND.cur[parseInt(b.getAttribute('data-fi'), 10)]; if(it) goItem(it); }
+    });
+    G('v2FindQ').addEventListener('input', function(){ renderFinder(this.value); });
+    G('v2FindQ').addEventListener('keydown', function(ev){
+      if(ev.key === 'Enter' && FIND.cur && FIND.cur.length && this.value.trim()){ goItem(FIND.cur[0]); }
+      if(ev.key === 'Escape') closeFinder();
+    });
+  }
+  w.style.display = 'flex'; FIND.open = true;
+  G('v2FindQ').value = ''; renderFinder('');
+  setTimeout(function(){ try{ G('v2FindQ').focus(); }catch(e){} }, 30);
+}
+function closeFinder(){ var w = G('v2Finder'); if(w) w.style.display = 'none'; FIND.open = false; }
+function bootFinder(){
+  var b = G('finderBtn'); if(b) b.onclick = openFinder;
+  document.addEventListener('keydown', function(ev){
+    var tag = (ev.target && ev.target.tagName) || '';
+    var typing = /INPUT|TEXTAREA|SELECT/.test(tag) || (ev.target && ev.target.isContentEditable);
+    if((ev.key === 'k' || ev.key === 'K') && (ev.ctrlKey || ev.metaKey)){ ev.preventDefault(); openFinder(); }
+    else if(ev.key === '/' && !typing && !ev.ctrlKey && !ev.metaKey && !ev.altKey){ ev.preventDefault(); openFinder(); }
+    else if(ev.key === 'Escape' && FIND.open) closeFinder();
+  });
+}
+
+/* ════════════════════════════════════════════════════════════════
+   ⑦ 밝은 화면 / 어두운 화면
+   ════════════════════════════════════════════════════════════════ */
+function curMode(){ return document.documentElement.classList.contains('light') ? 'light' : 'dark'; }
+function setMode(m){
+  m = (m === 'light') ? 'light' : 'dark';
+  document.documentElement.classList.toggle('light', m === 'light');
+  try{ localStorage.setItem('rift-ui-mode', m); }catch(e){}
+  if(ok()){ S.settings.uiMode = m; }
+  paintMode();
+}
+function toggleMode(){ setMode(curMode() === 'light' ? 'dark' : 'light'); if(ok()) saveGame(true); }
+function paintMode(){
+  var m = curMode(), b = G('modeBtn');
+  if(b){ b.textContent = m === 'light' ? '🌙 어둡게' : '☀️ 밝게'; b.title = m === 'light' ? '어두운 화면으로' : '밝은 화면으로'; }
+  var a = G('v2ModeLight'), d = G('v2ModeDark');
+  if(a) a.classList.toggle('on', m === 'light'); if(d) d.classList.toggle('on', m === 'dark');
+  try{ document.documentElement.setAttribute('data-accent', (ok() && S.settings.theme) || 'purple'); }catch(e){}
+}
+function bootMode(){
+  var b = G('modeBtn'); if(b) b.onclick = toggleMode;
+  // 세이브에 저장된 설정이 있으면 그걸 따른다 (다른 기기에서 이어할 때)
+  try{
+    var saved = S.settings.uiMode, local = localStorage.getItem('rift-ui-mode');
+    if(!local && saved) setMode(saved);
+  }catch(e){}
+  if(typeof applyTheme === 'function'){
+    var _at = applyTheme;
+    applyTheme = function(){ var r = _at.apply(this, arguments); try{ paintMode(); }catch(e){} return r; };
+    try{ window.applyTheme = applyTheme; }catch(e){}
+  }
+  paintMode();
+}
+
+/* ════════════════════════════════════════════════════════════════
+   설정 탭에 v2 항목 추가
+   ════════════════════════════════════════════════════════════════ */
+function paintSet(){
+  var e = v2(), a = G('v2StoryBtn'), b = G('v2BossBtn');
+  if(a){ a.textContent = e.storyPopup ? 'ON' : 'OFF'; a.classList.toggle('on', !!e.storyPopup); }
+  if(b){ b.textContent = e.bossPat ? 'ON' : 'OFF'; b.classList.toggle('on', !!e.bossPat); }
+  var adm = G('v2AdminRow');
+  if(adm) adm.style.display = (typeof ADMIN_NICK !== 'undefined' && S.nickname === ADMIN_NICK) ? '' : 'none';
+  var st = G('v2AdminState');
+  if(st) st.textContent = (typeof ADMIN_PASSWORD !== 'undefined' && ADMIN_PASSWORD) ? '인증됨 (이 기기에 보관 중)' : '아직 인증 안 됨 — 관리 기능을 쓰려면 비밀번호 입력';
+}
+function bootSet(){
+  var set = G('tab-set'); if(!set || G('v2SetBox')) return;
+  var h = set.querySelector('h2');
+  var html =
+    '<div id="v2SetBox">' +
+    '<div class="row"><div class="info">🖥 화면 밝기<small>어두운 화면이 답답하면 밝은 화면으로 바꾸세요</small></div>' +
+      '<div class="v2Seg"><button id="v2ModeDark">🌙 어둡게</button><button id="v2ModeLight">☀️ 밝게</button></div></div>' +
+    '<div class="row"><div class="info">📖 스토리 자동 표시<small>새 구간에 처음 도착하면 이야기 장면이 뜹니다</small></div><button id="v2StoryBtn"></button></div>' +
+    '<div class="row"><div class="info">👹 보스 패턴<small>약점·강타·재생 같은 보스 행동 패턴</small></div><button id="v2BossBtn"></button></div>' +
+    '<div class="row" id="v2AdminRow" style="display:none"><div class="info">👑 관리자 인증<small id="v2AdminState"></small></div>' +
+      '<div style="display:flex;gap:4px;"><button class="gold-btn" id="v2AdminIn">비밀번호 입력</button><button id="v2AdminOut">지우기</button></div></div>' +
+    '</div>';
+  if(h) h.insertAdjacentHTML('afterend', html); else set.insertAdjacentHTML('afterbegin', html);
+  G('v2ModeDark').onclick = function(){ setMode('dark'); saveGame(true); };
+  G('v2ModeLight').onclick = function(){ setMode('light'); saveGame(true); };
+  G('v2StoryBtn').onclick = function(){ var e = v2(); e.storyPopup = !e.storyPopup; saveGame(true); paintSet(); };
+  G('v2BossBtn').onclick = function(){ var e = v2(); e.bossPat = !e.bossPat; saveGame(true); paintSet(); };
+  G('v2AdminIn').onclick = function(){ if(typeof adminLogin === 'function') adminLogin().then(paintSet); };
+  G('v2AdminOut').onclick = function(){ if(typeof adminLogout === 'function') adminLogout(); paintSet(); };
+  paintSet(); paintMode();
+}
+
+/* ════════════════════════════════════════════════════════════════
+   ⑧ 꼼수 차단 마무리
+   ════════════════════════════════════════════════════════════════ */
+function bootGuard(){
+  // (a) 멈춘 탭(다른 탭에서 게임이 열림)은 저장·전투·서버 통신을 하지 않는다
+  var inactive = function(){ return !!(window.__riftTab && window.__riftTab.inactive); };
+  var _save = saveGame;
+  saveGame = function(){ if(inactive()) return Promise.resolve(); return _save.apply(this, arguments); };
+  var _ct = combatTick;
+  combatTick = function(){ if(inactive()) return; return _ct.apply(this, arguments); };
+  // (b) 서버 요청: 스태프 인증용 토큰을 함께 보내고, 개발자 닉네임은 비밀번호를 같이 보낸다
+  try{
+    if(typeof NET !== 'undefined' && NET && typeof NET.req === 'function'){
+      var _req = NET.req;
+      NET.req = function(path, data){
+        if(inactive()) return Promise.resolve(null);
+        try{
+          if(data && typeof data === 'object'){
+            var isAdm = ('pass' in data);
+            var isDev = ok() && typeof ADMIN_NICK !== 'undefined' && S.nickname === ADMIN_NICK;
+            if(isAdm || isDev){
+              if(!data.token && typeof getClientToken === 'function') data.token = getClientToken();
+              if(isAdm && !data.admin && ok()) data.admin = S.nickname;
+              if(isDev && !('pass' in data)) data.pass = ADMIN_PASSWORD;
+            }
+          }
+        }catch(e){}
+        return _req.call(this, path, data);
+      };
+    }
+  }catch(e){}
+  // 개발자 닉네임인데 아직 인증 전이면 안내
+  try{
+    if(ok() && typeof ADMIN_NICK !== 'undefined' && S.nickname === ADMIN_NICK && !ADMIN_PASSWORD){
+      setTimeout(function(){ toast('👑 관리자 인증이 필요합니다<br><span style="font-size:12px">설정 탭 → 관리자 인증에서 비밀번호를 입력하세요</span>', 'warn', 9000); }, 3500);
+    }
+  }catch(e){}
+  // (c) 포커 도중 창을 닫았으면 맡겨 둔 칩을 돌려준다 (판돈은 시작할 때 이미 빠져 있음)
+  try{
+    if(S.pokerHold > 0 && !(typeof pokerGame !== 'undefined' && pokerGame.active)){
+      S.gold = (S.gold || 0) + S.pokerHold; S.pokerHold = 0; saveGame(true);
+    }
+  }catch(e){}
+  // (d) 숫자가 망가진 세이브 복구 (NaN/음수 골드)
+  try{
+    ['gold', 'stones', 'shards', 'coins'].forEach(function(k){
+      if(typeof S[k] === 'number' && (isNaN(S[k]) || S[k] < 0)) S[k] = 0;
+    });
+  }catch(e){}
+  // (e) 서버 시각을 주기적으로 다시 맞춘다
+  var resync = function(){
+    try{
+      if(typeof NET === 'undefined' || !NET.isOnline() || !window.__riftTime) return;
+      var t0 = performance.now();
+      NET.req('/ping', {}).then(function(r){ if(r && r.time) window.__riftTime.sync(r.time * 1000 + 500, t0, performance.now()); });
+    }catch(e){}
+  };
+  setInterval(resync, 600000);
+}
+
+/* ════════════════════════════════════════════════════════════════
+   시동
+   ════════════════════════════════════════════════════════════════ */
+var steps = [['guard', bootGuard], ['up', bootUp], ['boss', bootBoss], ['bg', bootBg], ['finder', bootFinder], ['mode', bootMode], ['set', bootSet]];
+var boot = setInterval(function(){
+  if(!ok() || typeof combatTick !== 'function' || typeof spawnMob !== 'function') return;
+  clearInterval(boot);
+  v2();
+  steps.forEach(function(s){ try{ s[1](); }catch(e){ console.error('v2 시동 실패(' + s[0] + '):', e); } });
+  // 확장팩들이 화면에 항목을 꽂는 시점이 제각각이라, 제작소·설정은 조금 뒤에 한 번 더 확인
+  var tries = 0, late = setInterval(function(){
+    try{ bootCraft(); bootSet(); }catch(e){}
+    if(++tries > 20 || G('v2CraftBox')) clearInterval(late);
+  }, 700);
+  setInterval(function(){ try{ storyTick(); }catch(e){} }, 2000);
+  setInterval(function(){ try{ if(!hidden()){ paintSet(); var b = G('tab-ext'); if(b && b.classList.contains('on') && document.activeElement !== G('v2CrQ')) renderCraft2(); } }catch(e){} }, 1500);
+  log('<span class="p">🧰 확장팩 9탄 로드! 강화 수량 지정 · 끊기지 않는 오토 · 보스 패턴 · 스토리 · 제작소 · 🔍 찾기 · ☀️ 밝은 화면</span>');
+}, 500);
+
+window.RiftV2 = { openFinder:openFinder, setMode:setMode, toggleMode:toggleMode, craftGear:craftGear, patsFor:patsFor, upPlan:upPlan, _BG:BG };
+})();
+</script>
 </body>
 </html>
 

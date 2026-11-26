@@ -1,4 +1,4 @@
- # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 🌐 차원 균열의 만물상 — 온라인 서버
 표준 라이브러리만 사용 (설치 불필요)
@@ -2322,4 +2322,3 @@ if __name__ == '__main__':
         except Exception as e:
             _p('[서버 오류] %r — 3초 후 자동 재시작' % (e,))
             time.sleep(3)
-
